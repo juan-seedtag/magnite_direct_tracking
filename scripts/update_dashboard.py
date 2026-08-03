@@ -9,6 +9,7 @@ Host/user default to trino-users.seedt.ag / TRINO_USER env var.
 Output: index.html (and magnite_connection_health_latest.html) at repo root.
 """
 import json
+import os
 import sys
 import datetime as dt
 from pathlib import Path
@@ -16,6 +17,13 @@ from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from trino_client import run_trino_query
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+CONFIG_DIR = Path(os.getenv("SEEDTAG_CONFIG_DIR", Path.home() / ".config" / "seedtag"))
+DRIVE_SA_JSON = os.getenv("DRIVE_SA_JSON", "prj-jdpa-560863a21518.json")
+DRIVE_ROOT_FOLDER_ID = os.getenv("DRIVE_ROOT_FOLDER_ID", "1TAFpUwZLeat4wNWPYeQGayLE56UMfBvl")
+DRIVE_SUBFOLDER = os.getenv("DRIVE_SUBFOLDER", "Magnite Direct Tracking")
+DRIVE_FILENAME = os.getenv("DRIVE_FILENAME", "magnite_connection_health.html")
 
 TABLE = "st_datalakehouse.analytics.etl_ssp_supply_funnel_daily_local"
 WINDOW_START = dt.date(2026, 7, 1)
@@ -148,6 +156,37 @@ GROUP BY 1,2,3 ORDER BY 1,2,3"""
         with open(name, "w") as f:
             f.write(html)
     print("written index.html /", "magnite_connection_health_latest.html", len(html))
+
+    if "--upload" in sys.argv:
+        upload_to_gdrive(Path("index.html"))
+
+
+def _resolve_sa_path():
+    p = Path(DRIVE_SA_JSON)
+    if p.exists():
+        return p
+    for cand in (PROJECT_ROOT / DRIVE_SA_JSON, CONFIG_DIR / DRIVE_SA_JSON):
+        if cand.exists():
+            return cand
+    return None
+
+
+def upload_to_gdrive(html_path):
+    from drive_upload import upload_to_drive
+
+    sa = _resolve_sa_path()
+    if sa is None:
+        print(f"  x Drive upload skipped — service account JSON not found: {DRIVE_SA_JSON}")
+        return
+    print(f"Uploading to Google Drive (folder '{DRIVE_SUBFOLDER}')...")
+    url = upload_to_drive(
+        service_account_json_path=str(sa),
+        root_folder_id=DRIVE_ROOT_FOLDER_ID,
+        subfolder_name=DRIVE_SUBFOLDER,
+        filename=DRIVE_FILENAME,
+        file_path=str(html_path),
+    )
+    print(f"  Shareable link: {url}")
 
 
 def render_html(**kw):

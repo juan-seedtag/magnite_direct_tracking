@@ -18,6 +18,11 @@ Google OAuth against `trino-users.seedt.ag`, auto-refreshed on every request
 |---|---|
 | `GOOGLE_TOKEN` | Full contents of `~/.config/seedtag/token.json` |
 | `TRINO_USER` | Your Seedtag email (e.g. `juanperez@seedtag.com`) |
+| `DRIVE_SA` | Full contents of the Drive service-account JSON (`~/.config/seedtag/prj-jdpa-*.json`) — same value as publisher_pnl's `DRIVE_SA` secret |
+
+Each run also uploads `magnite_connection_health.html` to Google Drive, into the
+**Magnite Direct Tracking** subfolder of the same shared root folder publisher_pnl
+uses (override with `DRIVE_ROOT_FOLDER_ID` / `DRIVE_SUBFOLDER` / `DRIVE_FILENAME` env vars).
 
 If the token ever needs recreating: `python scripts/trino_client.py --login`
 (requires `credentials.json`), then update the secret.
