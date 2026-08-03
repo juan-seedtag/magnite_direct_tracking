@@ -1,52 +1,26 @@
 #!/usr/bin/env python3
 """Regenerate the Magnite Connection Health dashboard from Trino.
 
-Runs in GitHub Actions (or locally). Connection settings come from env vars:
-  TRINO_HOST      (required)
-  TRINO_PORT      (default 443)
-  TRINO_USER      (required)
-  TRINO_PASSWORD  (basic auth) or TRINO_JWT (JWT auth) — one of the two
-  TRINO_CATALOG   (default st_datalakehouse)
-  TRINO_HTTP_SCHEME (default https)
+Runs in GitHub Actions (or locally). Auth follows the publisher_pnl pattern:
+Google OAuth token in ~/.config/seedtag/token.json (or ./token.json, written
+from the GOOGLE_TOKEN secret in CI), auto-refreshed on every request.
+Host/user default to trino-users.seedt.ag / TRINO_USER env var.
 
 Output: index.html (and magnite_connection_health_latest.html) at repo root.
 """
 import json
-import os
 import sys
 import datetime as dt
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
-import trino
-from trino.auth import BasicAuthentication, JWTAuthentication
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from trino_client import run_trino_query
 
 TABLE = "st_datalakehouse.analytics.etl_ssp_supply_funnel_daily_local"
 WINDOW_START = dt.date(2026, 7, 1)
 MD_LAUNCH = dt.date(2026, 7, 10)
 TAG = "-- @user:juanperez@seedtag.com @skill:barbi"
-
-
-def get_conn():
-    host = os.environ["TRINO_HOST"]
-    user = os.environ["TRINO_USER"]
-    if os.environ.get("TRINO_JWT"):
-        auth = JWTAuthentication(os.environ["TRINO_JWT"])
-    else:
-        auth = BasicAuthentication(user, os.environ["TRINO_PASSWORD"])
-    return trino.dbapi.connect(
-        host=host,
-        port=int(os.environ.get("TRINO_PORT", "443")),
-        user=user,
-        catalog=os.environ.get("TRINO_CATALOG", "st_datalakehouse"),
-        http_scheme=os.environ.get("TRINO_HTTP_SCHEME", "https"),
-        auth=auth,
-    )
-
-
-def run(cur, sql):
-    cur.execute(sql)
-    cols = [d[0] for d in cur.description]
-    return [dict(zip(cols, r)) for r in cur.fetchall()]
 
 
 def latest_full_month(end):
@@ -112,15 +86,13 @@ WHERE f.date BETWEEN DATE '{d1}' AND DATE '{d2}'
   AND f.channel_id IN ('MagniteDirect','Rubicon')
 GROUP BY 1,2,3 ORDER BY 1,2,3"""
 
-    conn = get_conn()
-    cur = conn.cursor()
     print("querying daily aggregates...", flush=True)
-    daily_rows = run(cur, sql_daily)
+    daily_rows = run_trino_query(sql_daily)
     print(f"  {len(daily_rows)} rows", flush=True)
     print("querying KPIs...", flush=True)
-    kpi_rows = run(cur, sql_kpi)
+    kpi_rows = run_trino_query(sql_kpi)
     print("querying publisher pivot...", flush=True)
-    pivot_rows = run(cur, sql_pivot)
+    pivot_rows = run_trino_query(sql_pivot)
     print(f"  {len(pivot_rows)} rows", flush=True)
 
     DAILY = {}

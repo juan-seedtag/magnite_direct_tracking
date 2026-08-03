@@ -10,20 +10,17 @@ GitHub Actions ([.github/workflows/update-dashboard.yml](.github/workflows/updat
 
 ## Required GitHub secrets
 
-Set these under **Settings → Secrets and variables → Actions**:
+Same auth pattern as [publisher_pnl](https://github.com/juan-seedtag/publisher_pnl):
+Google OAuth against `trino-users.seedt.ag`, auto-refreshed on every request
+(`scripts/trino_client.py`). Set these under **Settings → Secrets and variables → Actions**:
 
 | Secret | Value |
 |---|---|
-| `TRINO_HOST` | Trino coordinator host (no scheme) |
-| `TRINO_PORT` | Port (optional, default 443) |
-| `TRINO_USER` | Service account user |
-| `TRINO_PASSWORD` | Password for basic auth — **or** set `TRINO_JWT` instead |
-| `TRINO_JWT` | JWT token (optional alternative to password) |
-| `TRINO_CATALOG` | Optional, default `st_datalakehouse` |
+| `GOOGLE_TOKEN` | Full contents of `~/.config/seedtag/token.json` |
+| `TRINO_USER` | Your Seedtag email (e.g. `juanperez@seedtag.com`) |
 
-The interactive session used Seedtag SSO via the de-toolbox MCP server; CI cannot do SSO,
-so it needs a service account (ask Data Engineering for one scoped read-only to
-`st_datalakehouse.analytics`).
+If the token ever needs recreating: `python scripts/trino_client.py --login`
+(requires `credentials.json`), then update the secret.
 
 ## Viewing
 
