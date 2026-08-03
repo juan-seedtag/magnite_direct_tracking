@@ -475,6 +475,7 @@ function renderKPIs(){{
     const a=acc[ci];
     const cards=[
       ['Gross Revenue',fmtEUR(a.g)],
+      ['Bids',fmtInt(a.bids||null)],
       ['Win Rate (HB)',fmtPct(div(a.hbHW,a.hbW))],
       ['Imp Rate (Tag)',fmtPct(div(a.tagIS,a.tagW))],
       ['CPM (EUR)',a.ip?'€'+(a.pr*1000/a.ip).toFixed(2):'—'],
@@ -590,6 +591,7 @@ let pivotCache=null;
 function pivotKeys(){{ return Object.keys(pivotCache.eg); }}
 const PIVOT_METRICS=[
   ['Gross Revenue',a=>a.g?fmtEUR(a.g):(a.g===0?'—':fmtEUR(a.g))],
+  ['Bids',a=>a.bids?fmtInt(a.bids):'—'],
   ['CPM',a=>a.ip?'€'+(a.pr*1000/a.ip).toFixed(2):'—'],
   ['Win Rate (HB)',a=>a.hbW?fmtPct(a.hbHW/a.hbW):'—'],
   ['Imp Rate (Tag)',a=>a.tagW?fmtPct(a.tagIS/a.tagW):'—'],
