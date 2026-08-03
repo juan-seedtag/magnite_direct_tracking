@@ -252,6 +252,11 @@ footer.report-footer {{ margin-top:48px; padding:16px 32px; border-top:1px solid
   border:1px solid var(--border); border-radius:50%; cursor:pointer; z-index:10000;
   box-shadow:0 2px 8px rgba(0,0,0,0.08); transition:background 200ms ease,color 200ms ease,transform 150ms ease; }}
 #theme-toggle:hover {{ transform:scale(1.05); }}
+#last-update {{ position:fixed; top:16px; right:64px; height:36px; display:inline-flex; align-items:center;
+  gap:6px; padding:0 14px; background:var(--surface); color:var(--text-muted); border:1px solid var(--border);
+  border-radius:18px; font-size:12px; z-index:10000; box-shadow:0 2px 8px rgba(0,0,0,0.08); white-space:nowrap; }}
+#last-update strong {{ color:var(--text); font-weight:600; }}
+@media (max-width:640px) {{ #last-update {{ display:none; }} }}
 #theme-toggle .icon-moon {{ display:none; }}
 html[data-theme="dark"] #theme-toggle .icon-sun {{ display:none; }}
 html[data-theme="dark"] #theme-toggle .icon-moon {{ display:inline; }}
@@ -303,6 +308,7 @@ tr.md-row td.pub {{ background:color-mix(in srgb, var(--accent) 6%, var(--surfac
 </style>
 </head>
 <body>
+<div id="last-update" title="When this page was last rebuilt from Trino (data through {kw['d2']})">Data updated: <strong>{kw['generated']}</strong></div>
 <button id="theme-toggle" aria-label="Toggle dark mode" title="Toggle dark mode">
   <svg class="icon-sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
   <svg class="icon-moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
