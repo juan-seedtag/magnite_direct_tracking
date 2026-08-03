@@ -91,9 +91,14 @@ SELECT
   SUM(f.revenue_st_eur) AS gross_revenue_eur,
   SUM(f.publisher_revenue_eur) AS publisher_revenue_eur,
   SUM(CASE WHEN f.product_short_code LIKE 'O%' THEN f.revenue_st_eur ELSE 0 END) AS omp_gross_revenue_eur,
-  IF(SUM(f.bids) = 0, NULL,
-     SUM(CASE WHEN f.source_type IN ({hb_list})
-              THEN f.hb_wins ELSE f.wins END) * 1.0 / SUM(f.bids)) AS win_rate,
+  -- Win Rate = HB wins / SSP wins — HB-family sources only, NULL elsewhere
+  IF(SUM(CASE WHEN f.source_type IN ({hb_list}) THEN f.wins ELSE 0 END) = 0, NULL,
+     SUM(CASE WHEN f.source_type IN ({hb_list}) THEN f.hb_wins ELSE 0 END) * 1.0 /
+     SUM(CASE WHEN f.source_type IN ({hb_list}) THEN f.wins ELSE 0 END)) AS win_rate,
+  -- Imp Rate = impressions sold / SSP wins — non-HB (Tag-family) sources only, NULL elsewhere
+  IF(SUM(CASE WHEN f.source_type NOT IN ({hb_list}) THEN f.wins ELSE 0 END) = 0, NULL,
+     SUM(CASE WHEN f.source_type NOT IN ({hb_list}) THEN f.imps_sold ELSE 0 END) * 1.0 /
+     SUM(CASE WHEN f.source_type NOT IN ({hb_list}) THEN f.wins ELSE 0 END)) AS imp_rate,
   SUM(CASE WHEN f.product_short_code LIKE 'O%' THEN f.revenue_st_eur ELSE 0 END) * 1000.0
   / NULLIF(SUM(f.bids), 0) AS rpm_per_bid_eur,
   IF(SUM(f.imps_paid) = 0, NULL,
@@ -203,9 +208,9 @@ def render_html(**kw):
     LOGO20 = LOGO32.replace('width="32" height="32"', 'width="20" height="20"')
 
     hbfam_js = json.dumps(list(HB_FAMILY))
-    wr_note = ("Effective Win Rate counts on-page header-auction wins (hb_wins) for HB-family sources "
-               "and SSP wins for the rest; values are comparable across source types but exclude "
-               "render/delivery drop-off.")
+    wr_note = ("Win Rate applies to header-bidding sources only (hb_wins/wins). Tag-style sources have "
+               "no on-page auction — their efficiency metric is Imp Rate (imps_sold/wins). The two are "
+               "different funnel steps and not comparable to each other.")
     pending_banner = ""
     if kw["pending"]:
         restored = set(kw["restored"])
@@ -378,7 +383,7 @@ tr.sub-row td.pub {{ padding-left:28px; color:var(--text-muted); }}
 <div class="chart-box"><div style="position:relative;height:320px"><canvas id="revChart"></canvas></div></div>
 <p class="summary-line" id="s1Summary"></p>
 <div class="chart-box"><div style="position:relative;height:280px"><canvas id="ratioChart"></canvas></div></div>
-<p class="summary-line">Effective Win Rate (solid, left axis) and CPM (dashed, right axis) per channel. {wr_note} Recent CPM points are provisional due to the impression-reporting lag.</p>
+<p class="summary-line">Win Rate (HB) and Imp Rate (Tag) per channel (left axis) and CPM (dashed, right axis). {wr_note} Recent CPM points are provisional due to the impression-reporting lag.</p>
 <p class="data-footer">Source: Daily supply funnel — Magnite channels only, publishers with MagniteDirect activity, all products, {kw['d1']} – {kw['d2']}, revenue in EUR. Respects the filters above. Dates marked * are pending warehouse restore.</p>
 </section>
 
@@ -452,12 +457,14 @@ function filt(rows){{
   return rows.filter(r=>(!eg||r[2]===eg)&&(!st||r[3]===st)&&(!au||r[4]===au)&&(!pub||r[5]===pub));
 }}
 
-// zero-filled accumulator; ew = effective wins (hb_wins on HB-family sources,
-// SSP wins elsewhere) — the numerator of Effective Win Rate
-function zeroAcc(){{return {{g:0,og:0,pr:0,bids:0,wins:0,hw:0,is:0,ip:0,ew:0}};}}
+// zero-filled accumulator; family-split fields feed the two rate metrics:
+// hbW/hbHW = wins/hb_wins on HB-family rows -> Win Rate (HB) = hbHW/hbW
+// tagW/tagIS = wins/imps_sold on non-HB rows -> Imp Rate (Tag) = tagIS/tagW
+function zeroAcc(){{return {{g:0,og:0,pr:0,bids:0,wins:0,hw:0,is:0,ip:0,hbW:0,hbHW:0,tagW:0,tagIS:0}};}}
 function addTo(acc,row){{
   for(const k in M) acc[k]+=row[B0+M[k]]||0;
-  acc.ew+=(HB_FAMILY.has(row[3])?row[B0+M.hw]:row[B0+M.wins])||0;
+  if(HB_FAMILY.has(row[3])){{ acc.hbW+=row[B0+M.wins]||0; acc.hbHW+=row[B0+M.hw]||0; }}
+  else {{ acc.tagW+=row[B0+M.wins]||0; acc.tagIS+=row[B0+M.is]||0; }}
 }}
 
 // ---------- KPI cards ----------
@@ -468,7 +475,8 @@ function renderKPIs(){{
     const a=acc[ci];
     const cards=[
       ['Gross Revenue',fmtEUR(a.g)],
-      ['Effective Win Rate',fmtPct(div(a.ew,a.bids))],
+      ['Win Rate (HB)',fmtPct(div(a.hbHW,a.hbW))],
+      ['Imp Rate (Tag)',fmtPct(div(a.tagIS,a.tagW))],
       ['CPM (EUR)',a.ip?'€'+(a.pr*1000/a.ip).toFixed(2):'—'],
       ['RPM per 1,000 bids (EUR)',a.bids?'€'+(a.og*1000/a.bids).toFixed(4):'—'],
     ];
@@ -509,16 +517,20 @@ function buildCharts(){{
     {{label:'MagniteDirect Publisher Rev',data:DATES.map((_,i)=>gap(i,D[1][i].pr)),backgroundColor:COLORS[5]}}
   ]}};
   const ratioData={{labels:LABELS,datasets:[
-    {{label:'Rubicon Effective Win Rate',data:DATES.map((_,i)=>div(D[0][i].ew,D[0][i].bids)),borderColor:COLORS[0],backgroundColor:COLORS[0],yAxisID:'y',pointRadius:2,tension:0.25}},
-    {{label:'MagniteDirect Effective Win Rate',data:DATES.map((_,i)=>div(D[1][i].ew,D[1][i].bids)),borderColor:COLORS[1],backgroundColor:COLORS[1],yAxisID:'y',pointRadius:2,tension:0.25}},
+    {{label:'Rubicon Win Rate (HB)',data:DATES.map((_,i)=>div(D[0][i].hbHW,D[0][i].hbW)),borderColor:COLORS[0],backgroundColor:COLORS[0],yAxisID:'y',pointRadius:2,tension:0.25}},
+    {{label:'MagniteDirect Win Rate (HB)',data:DATES.map((_,i)=>div(D[1][i].hbHW,D[1][i].hbW)),borderColor:COLORS[1],backgroundColor:COLORS[1],yAxisID:'y',pointRadius:2,tension:0.25}},
+    {{label:'Rubicon Imp Rate (Tag)',data:DATES.map((_,i)=>div(D[0][i].tagIS,D[0][i].tagW)),borderColor:COLORS[2],backgroundColor:COLORS[2],yAxisID:'y',pointRadius:2,tension:0.25}},
+    {{label:'MagniteDirect Imp Rate (Tag)',data:DATES.map((_,i)=>div(D[1][i].tagIS,D[1][i].tagW)),borderColor:COLORS[6],backgroundColor:COLORS[6],yAxisID:'y',pointRadius:2,tension:0.25}},
     {{label:'Rubicon CPM',data:DATES.map((_,i)=>D[0][i].ip?D[0][i].pr*1000/D[0][i].ip:null),borderColor:COLORS[3],backgroundColor:COLORS[3],yAxisID:'y2',borderDash:[5,4],pointRadius:2,tension:0.25}},
     {{label:'MagniteDirect CPM',data:DATES.map((_,i)=>D[1][i].ip?D[1][i].pr*1000/D[1][i].ip:null),borderColor:COLORS[5],backgroundColor:COLORS[5],yAxisID:'y2',borderDash:[5,4],pointRadius:2,tension:0.25}}
   ]}};
   const rampData={{labels:MD_IDX.map(i=>LABELS[i]),datasets:[
     {{type:'bar',label:'MagniteDirect Gross (EUR)',data:MD_IDX.map(i=>gap(i,D[1][i].g)),backgroundColor:'#FF6B7C',yAxisID:'y'}},
     {{type:'bar',label:'Rubicon Gross (EUR)',data:MD_IDX.map(i=>gap(i,D[0][i].g)),backgroundColor:COLORS[0],yAxisID:'y'}},
-    {{type:'line',label:'MagniteDirect Effective Win Rate',data:MD_IDX.map(i=>div(D[1][i].ew,D[1][i].bids)),borderColor:COLORS[1],backgroundColor:COLORS[1],yAxisID:'y2',pointRadius:2,tension:0.25}},
-    {{type:'line',label:'Rubicon Effective Win Rate',data:MD_IDX.map(i=>div(D[0][i].ew,D[0][i].bids)),borderColor:COLORS[2],backgroundColor:COLORS[2],yAxisID:'y2',pointRadius:2,tension:0.25}}
+    {{type:'line',label:'MagniteDirect Win Rate (HB)',data:MD_IDX.map(i=>div(D[1][i].hbHW,D[1][i].hbW)),borderColor:COLORS[1],backgroundColor:COLORS[1],yAxisID:'y2',pointRadius:2,tension:0.25}},
+    {{type:'line',label:'Rubicon Win Rate (HB)',data:MD_IDX.map(i=>div(D[0][i].hbHW,D[0][i].hbW)),borderColor:COLORS[2],backgroundColor:COLORS[2],yAxisID:'y2',pointRadius:2,tension:0.25}},
+    {{type:'line',label:'MagniteDirect Imp Rate (Tag)',data:MD_IDX.map(i=>div(D[1][i].tagIS,D[1][i].tagW)),borderColor:COLORS[5],backgroundColor:COLORS[5],yAxisID:'y2',borderDash:[5,4],pointRadius:2,tension:0.25}},
+    {{type:'line',label:'Rubicon Imp Rate (Tag)',data:MD_IDX.map(i=>div(D[0][i].tagIS,D[0][i].tagW)),borderColor:COLORS[6],backgroundColor:COLORS[6],yAxisID:'y2',borderDash:[5,4],pointRadius:2,tension:0.25}}
   ]}};
 
   if(!revChart){{
@@ -528,13 +540,13 @@ function buildCharts(){{
     revChart=new Chart(document.getElementById('revChart'),{{type:'bar',data:revData,options:o}}); charts.push(revChart);
     o=baseOpts(t);
     o.scales={{x:{{ticks:{{color:t.muted}},grid:{{color:t.border}}}},
-      y:{{position:'left',ticks:{{color:t.muted,callback:v=>(v*100).toFixed(0)+'%'}},grid:{{color:t.border}},title:{{display:true,text:'Effective Win Rate',color:t.muted}}}},
+      y:{{position:'left',ticks:{{color:t.muted,callback:v=>(v*100).toFixed(0)+'%'}},grid:{{color:t.border}},title:{{display:true,text:'Rate',color:t.muted}}}},
       y2:{{position:'right',ticks:{{color:t.muted,callback:v=>'€'+v.toFixed(2)}},grid:{{drawOnChartArea:false}},title:{{display:true,text:'CPM (EUR)',color:t.muted}}}}}};
     ratioChart=new Chart(document.getElementById('ratioChart'),{{type:'line',data:ratioData,options:o}}); charts.push(ratioChart);
     o=baseOpts(t);
     o.scales={{x:{{ticks:{{color:t.muted}},grid:{{color:t.border}}}},
       y:{{type:'logarithmic',position:'left',ticks:{{color:t.muted,callback:v=>'€'+Number(v).toLocaleString()}},grid:{{color:t.border}},title:{{display:true,text:'Gross Revenue (EUR, log scale)',color:t.muted}}}},
-      y2:{{position:'right',ticks:{{color:t.muted,callback:v=>(v*100).toFixed(0)+'%'}},grid:{{drawOnChartArea:false}},title:{{display:true,text:'Effective Win Rate',color:t.muted}}}}}};
+      y2:{{position:'right',ticks:{{color:t.muted,callback:v=>(v*100).toFixed(0)+'%'}},grid:{{drawOnChartArea:false}},title:{{display:true,text:'Rate',color:t.muted}}}}}};
     rampChart=new Chart(document.getElementById('rampChart'),{{data:rampData,options:o}}); charts.push(rampChart);
   }} else {{
     revChart.data=revData; ratioChart.data=ratioData; rampChart.data=rampData;
@@ -545,9 +557,9 @@ function buildCharts(){{
   const pendNote=PENDING.size?' Dates marked * are pending warehouse restore.':'';
   document.getElementById('s1Summary').textContent=
     'Latest closed day ('+DATES[li]+'): Rubicon '+fmtEUR(D[0][li].g||null)+' Gross vs MagniteDirect '+fmtEUR(D[1][li].g||null)+' (MagniteDirect publishers only).'+pendNote;
-  const wr=div(D[1][li].ew,D[1][li].bids), wrR=div(D[0][li].ew,D[0][li].bids);
+  const wr=div(D[1][li].hbHW,D[1][li].hbW), wrR=div(D[0][li].hbHW,D[0][li].hbW);
   document.getElementById('s2Summary').textContent=
-    'MagniteDirect Gross on '+DATES[li]+': '+fmtEUR(D[1][li].g||null)+(wr!=null?' with a '+(wr*100).toFixed(1)+'% Effective Win Rate':'')
+    'MagniteDirect Gross on '+DATES[li]+': '+fmtEUR(D[1][li].g||null)+(wr!=null?' with a '+(wr*100).toFixed(1)+'% Win Rate (HB)':'')
     +(wrR!=null?' (Rubicon: '+(wrR*100).toFixed(1)+'%)':'')+'.'+pendNote;
 }}
 
@@ -579,7 +591,8 @@ function pivotKeys(){{ return Object.keys(pivotCache.eg); }}
 const PIVOT_METRICS=[
   ['Gross Revenue',a=>a.g?fmtEUR(a.g):(a.g===0?'—':fmtEUR(a.g))],
   ['CPM',a=>a.ip?'€'+(a.pr*1000/a.ip).toFixed(2):'—'],
-  ['Effective Win Rate',a=>a.bids?fmtPct(a.ew/a.bids):'—'],
+  ['Win Rate (HB)',a=>a.hbW?fmtPct(a.hbHW/a.hbW):'—'],
+  ['Imp Rate (Tag)',a=>a.tagW?fmtPct(a.tagIS/a.tagW):'—'],
 ];
 function hasData(perDay){{ return perDay.some(a=>a.g||a.wins||a.ip); }}
 function pivotRows(label,perCh,subCls){{
@@ -643,7 +656,8 @@ function funnelKeys(){{ return Object.keys(funnelCache.eg); }}
 function funnelCells(a){{
   return '<td>'+fmtInt(a.bids)+'</td><td>'+fmtInt(a.wins)+'</td><td>'+fmtInt(a.hw)+'</td><td>'+fmtInt(a.is)+'</td><td>'+fmtInt(a.ip)+'</td>'
     +'<td>'+fmtEUR(a.g)+'</td><td>'+fmtEUR(a.pr)+'</td><td>'+fmtEUR(a.og)+'</td>'
-    +'<td>'+(a.bids?fmtPct(a.ew/a.bids):'—')+'</td>'
+    +'<td>'+(a.hbW?fmtPct(a.hbHW/a.hbW):'—')+'</td>'
+    +'<td>'+(a.tagW?fmtPct(a.tagIS/a.tagW):'—')+'</td>'
     +'<td>'+(a.bids?'€'+(a.og*1000/a.bids).toFixed(4):'—')+'</td>'
     +'<td>'+(a.ip?'€'+(a.pr*1000/a.ip).toFixed(2):'—')+'</td>';
 }}
@@ -654,7 +668,7 @@ function renderFunnel(){{
   let h='<thead><tr><th class="pub">Editorial group / publisher</th><th style="text-align:left">Channel</th>'
     +'<th>Bids</th><th>Wins</th><th>HB Wins</th><th>Imps Sold</th><th>Imps Paid</th>'
     +'<th>Gross Rev (EUR)</th><th>Publisher Rev (EUR)</th><th>OMP Gross (EUR)</th>'
-    +'<th>Effective Win Rate</th><th>RPM per 1,000 bids (EUR)</th><th>CPM (EUR)</th></tr></thead><tbody>';
+    +'<th>Win Rate (HB)</th><th>Imp Rate (Tag)</th><th>RPM per 1,000 bids (EUR)</th><th>CPM (EUR)</th></tr></thead><tbody>';
   order.forEach(k=>{{
     const [egName,ciS]=k.split('\\u0001');
     const ci=+ciS;
