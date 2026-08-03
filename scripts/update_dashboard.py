@@ -22,8 +22,8 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 CONFIG_DIR = Path(os.getenv("SEEDTAG_CONFIG_DIR", Path.home() / ".config" / "seedtag"))
 DRIVE_SA_JSON = os.getenv("DRIVE_SA_JSON", "prj-jdpa-560863a21518.json")
 DRIVE_ROOT_FOLDER_ID = os.getenv("DRIVE_ROOT_FOLDER_ID", "1TAFpUwZLeat4wNWPYeQGayLE56UMfBvl")
-DRIVE_SUBFOLDER = os.getenv("DRIVE_SUBFOLDER", "Magnite Direct Tracking")
-DRIVE_FILENAME = os.getenv("DRIVE_FILENAME", "magnite_connection_health.html")
+DRIVE_SUBFOLDER = os.getenv("DRIVE_SUBFOLDER", "Magnite Direct")
+DRIVE_FILENAME = os.getenv("DRIVE_FILENAME", "index.html")
 
 TABLE = "st_datalakehouse.analytics.etl_ssp_supply_funnel_daily_local"
 WINDOW_START = dt.date(2026, 7, 1)
@@ -55,6 +55,7 @@ def main():
 SELECT date, channel_id,
   SUM(revenue_st_eur) AS gross_eur,
   SUM(publisher_revenue_eur) AS pub_rev_eur,
+  SUM(bids) AS bids,
   SUM(wins) AS wins, SUM(hb_wins) AS hb_wins,
   SUM(imps_paid) AS imps_paid
 FROM {TABLE}
@@ -94,6 +95,46 @@ WHERE f.date BETWEEN DATE '{d1}' AND DATE '{d2}'
   AND f.channel_id IN ('MagniteDirect','Rubicon')
 GROUP BY 1,2,3 ORDER BY 1,2,3"""
 
+    sql_funnel = f"""{TAG}
+WITH magnite_publishers AS (
+  SELECT DISTINCT publisher_name
+  FROM {TABLE}
+  WHERE date BETWEEN DATE '{d1}' AND DATE '{d2}'
+    AND channel_id = 'MagniteDirect'
+    AND source_type IS DISTINCT FROM 'Beachfront'
+)
+SELECT
+  f.channel_id,
+  f.editorial_group_name,
+  f.publisher_name,
+  f.source_type,
+  SUM(CASE WHEN f.source_type IN ('Tag', 'SingleAdUnitTag', 'Amp', 'App')
+           THEN f.bi_without_refresh
+           ELSE f.bi_with_refresh END)                                 AS bid_inputs,
+  SUM(f.bids)                                                          AS bids,
+  SUM(f.wins)                                                          AS wins,
+  SUM(f.hb_wins)                                                       AS hb_wins,
+  SUM(f.imps_sold)                                                     AS imps_sold,
+  SUM(f.revenue_st_eur)                                                AS gross_revenue_eur,
+  SUM(CASE WHEN f.product_short_code LIKE 'O%' THEN f.revenue_st_eur ELSE 0 END) AS omp_gross_revenue_eur,
+  IF(SUM(CASE WHEN f.source_type IN ('Tag', 'SingleAdUnitTag', 'Amp', 'App')
+              THEN f.bi_without_refresh ELSE f.bi_with_refresh END) = 0, NULL,
+     SUM(f.wins) * 1.0 /
+     SUM(CASE WHEN f.source_type IN ('Tag', 'SingleAdUnitTag', 'Amp', 'App')
+              THEN f.bi_without_refresh ELSE f.bi_with_refresh END))   AS bid_rate,
+  IF(SUM(f.bids) = 0, NULL, SUM(f.wins) * 1.0 / SUM(f.bids))           AS auction_win_rate,
+  IF(SUM(f.wins) = 0, NULL, SUM(f.hb_wins) * 1.0 / SUM(f.wins))        AS hb_win_rate,
+  SUM(CASE WHEN f.product_short_code LIKE 'O%' THEN f.revenue_st_eur ELSE 0 END) * 1000.0
+  / NULLIF(SUM(CASE WHEN f.source_type IN ('Tag', 'SingleAdUnitTag', 'Amp', 'App')
+                    THEN f.bi_without_refresh ELSE f.bi_with_refresh END), 0) AS rpm_eur
+FROM {TABLE} f
+WHERE f.date BETWEEN DATE '{d1}' AND DATE '{d2}'
+  AND f.channel_id IN ('Rubicon', 'MagniteDirect')
+  AND f.source_type IS DISTINCT FROM 'Beachfront'
+  AND f.publisher_name IN (SELECT publisher_name FROM magnite_publishers)
+GROUP BY 1, 2, 3, 4
+ORDER BY gross_revenue_eur DESC"""
+
     print("querying daily aggregates...", flush=True)
     daily_rows = run_trino_query(sql_daily)
     print(f"  {len(daily_rows)} rows", flush=True)
@@ -102,6 +143,9 @@ GROUP BY 1,2,3 ORDER BY 1,2,3"""
     print("querying publisher pivot...", flush=True)
     pivot_rows = run_trino_query(sql_pivot)
     print(f"  {len(pivot_rows)} rows", flush=True)
+    print("querying funnel by publisher/source_type...", flush=True)
+    funnel_rows = run_trino_query(sql_funnel)
+    print(f"  {len(funnel_rows)} rows", flush=True)
 
     DAILY = {}
     for r in daily_rows:
@@ -109,10 +153,27 @@ GROUP BY 1,2,3 ORDER BY 1,2,3"""
         DAILY.setdefault(r["channel_id"], {})[d] = {
             "g": round(float(r["gross_eur"] or 0), 2),
             "pr": round(float(r["pub_rev_eur"] or 0), 2),
+            "b": int(r["bids"] or 0),
             "w": int(r["wins"] or 0),
             "hw": int(r["hb_wins"] or 0),
             "ip": int(r["imps_paid"] or 0),
         }
+
+    FUNNEL = []
+    for r in funnel_rows:
+        FUNNEL.append({
+            "ch": r["channel_id"], "eg": r["editorial_group_name"],
+            "pub": r["publisher_name"], "st": r["source_type"],
+            "bi": int(r["bid_inputs"] or 0), "bids": int(r["bids"] or 0),
+            "wins": int(r["wins"] or 0), "hw": int(r["hb_wins"] or 0),
+            "is": int(r["imps_sold"] or 0),
+            "g": round(float(r["gross_revenue_eur"] or 0), 2),
+            "og": round(float(r["omp_gross_revenue_eur"] or 0), 2),
+            "br": None if r["bid_rate"] is None else round(float(r["bid_rate"]), 6),
+            "awr": None if r["auction_win_rate"] is None else round(float(r["auction_win_rate"]), 6),
+            "hwr": None if r["hb_win_rate"] is None else round(float(r["hb_win_rate"]), 6),
+            "rpm": None if r["rpm_eur"] is None else round(float(r["rpm_eur"]), 4),
+        })
 
     kpi = {r["channel_id"]: r for r in kpi_rows}
     rub, md = kpi.get("Rubicon", {}), kpi.get("MagniteDirect", {})
@@ -140,7 +201,7 @@ GROUP BY 1,2,3 ORDER BY 1,2,3"""
     dates_js = f"Array.from({{length:{n_days}}}, (_,i)=>{{const d=new Date(Date.UTC({start.year},{start.month-1},{start.day}+i));return d.toISOString().slice(0,10);}})"
 
     html = render_html(
-        DAILY=DAILY, pivot=pivot,
+        DAILY=DAILY, pivot=pivot, funnel=FUNNEL, sql_funnel=sql_funnel,
         d1=d1, d2=d2, dates_js=dates_js,
         md_launch=MD_LAUNCH.isoformat(),
         month_label=month_label,
@@ -152,10 +213,9 @@ GROUP BY 1,2,3 ORDER BY 1,2,3"""
         sql_daily=sql_daily, sql_pivot=sql_pivot,
         generated=madrid_now.strftime("%Y-%m-%d %H:%M %Z"),
     )
-    for name in ("index.html", "magnite_connection_health_latest.html"):
-        with open(name, "w") as f:
-            f.write(html)
-    print("written index.html /", "magnite_connection_health_latest.html", len(html))
+    with open("index.html", "w") as f:
+        f.write(html)
+    print("written index.html", len(html))
 
     if "--upload" in sys.argv:
         upload_to_gdrive(Path("index.html"))
@@ -324,8 +384,8 @@ tr.md-row td.pub {{ background:color-mix(in srgb, var(--accent) 6%, var(--surfac
 <div class="kpi-row">
   <div class="kpi-card"><div class="label">Rubicon Gross — {kw['month_label']}</div><div class="value">{kw['kpi_rub_month']}</div><div class="note">Latest full month</div></div>
   <div class="kpi-card highlight"><div class="label">MagniteDirect Gross since launch</div><div class="value">{kw['kpi_md_total']}</div><div class="note">Live since {kw['md_launch']}</div></div>
-  <div class="kpi-card"><div class="label">Win Rate — Rubicon</div><div class="value">{kw['kpi_wr_rub']}</div><div class="note">{kw['d1']} – {kw['d2']}</div></div>
-  <div class="kpi-card"><div class="label">Win Rate — MagniteDirect</div><div class="value">{kw['kpi_wr_md']}</div><div class="note">Since launch</div></div>
+  <div class="kpi-card"><div class="label">HB Win Rate — Rubicon</div><div class="value">{kw['kpi_wr_rub']}</div><div class="note">{kw['d1']} – {kw['d2']}</div></div>
+  <div class="kpi-card"><div class="label">HB Win Rate — MagniteDirect</div><div class="value">{kw['kpi_wr_md']}</div><div class="note">Since launch</div></div>
   <div class="kpi-card"><div class="label">CPM — Rubicon</div><div class="value">{kw['kpi_cpm_rub']}</div><div class="note">{kw['d1']} – {kw['d2']}</div></div>
 </div>
 
@@ -333,7 +393,8 @@ tr.md-row td.pub {{ background:color-mix(in srgb, var(--accent) 6%, var(--surfac
   <strong>Structural caveats</strong>
   <ul>
     <li><strong>Requests / Bid Rate / RPM cannot be split by channel</strong> — bid inputs are recorded before a channel is assigned, so channel-level demand volume is measured in bids.</li>
-    <li><strong>Win Rate reads 0% on non-header-bidding integrations</strong> (e.g. elconfidencial.com) — judge those publishers on revenue, CPM and delivery instead.</li>
+    <li><strong>HB Win Rate reads 0% on non-header-bidding integrations</strong> (e.g. elconfidencial.com) — it only measures the on-page header-bidding step; use Auction Win Rate (wins / bids) for all source types.</li>
+    <li><strong>Bid Inputs, Bid Rate and RPM are structurally NULL at channel grain</strong> — bid inputs are counted before a channel is assigned; the columns are kept in Section 4 for audit but render as —.</li>
     <li><strong>Publisher-reported impressions lag ~3 days</strong> — CPM for the most recent days is provisional; missing values render as —, never as 0.</li>
   </ul>
 </div>
@@ -361,6 +422,13 @@ tr.md-row td.pub {{ background:color-mix(in srgb, var(--accent) 6%, var(--surfac
 <p class="data-footer">Source: Daily supply funnel — publishers with Gross Revenue on both Rubicon and MagniteDirect, all products, {kw['d1']} – {kw['d2']}, revenue in EUR. Rows sorted by MagniteDirect Gross; MagniteDirect rows tinted coral; — = no data / provisional (impressions lag).</p>
 </section>
 
+<section>
+<h2>4 · Funnel health by publisher &amp; source type {tooltip(kw['sql_funnel'])}</h2>
+<div class="pivot-wrap"><table class="report-table" id="funnelTable"></table></div>
+<p class="summary-line" id="funnelSummary"></p>
+<p class="data-footer">Source: Daily supply funnel — MagniteDirect publishers on both Magnite channels, all products (OMP-only revenue also shown), {kw['d1']} – {kw['d2']}, revenue in EUR. Funnel order: bid inputs → bids → wins → (HB only: hb wins) → imps sold. Bid Inputs / Bid Rate / RPM are structurally — at channel grain; HB Win Rate is blanked on non-HeaderBidding rows.</p>
+</section>
+
 <footer class="report-footer">{LOGO20}<span>Analytics Team · Magnite Connection Health — Rubicon vs MagniteDirect · {kw['d1']} → {kw['d2']}</span></footer>
 
 <script>
@@ -381,6 +449,7 @@ function copyQuery(btn) {{
 
 function get(ch,d,k) {{ const r=DAILY[ch]&&DAILY[ch][d]; return r?r[k]:null; }}
 function winRate(ch,d) {{ const r=DAILY[ch]&&DAILY[ch][d]; if(!r||!r.w) return null; return r.hw/r.w; }}
+function auctionWinRate(ch,d) {{ const r=DAILY[ch]&&DAILY[ch][d]; if(!r||!r.b) return null; return r.w/r.b; }}
 function cpm(ch,d) {{ const r=DAILY[ch]&&DAILY[ch][d]; if(!r||!r.ip) return null; return r.pr*1000/r.ip; }}
 const fmtEUR = v => v==null?'—':'€'+v.toLocaleString('en-US',{{minimumFractionDigits:2,maximumFractionDigits:2}});
 
@@ -416,8 +485,10 @@ opt.scales={{ x:{{ticks:{{color:t0.muted}},grid:{{color:t0.border}}}},
   y:{{position:'left',ticks:{{color:t0.muted,callback:v=>(v*100).toFixed(0)+'%'}},grid:{{color:t0.border}},title:{{display:true,text:'Win Rate',color:t0.muted}}}},
   y2:{{position:'right',ticks:{{color:t0.muted,callback:v=>'€'+v.toFixed(2)}},grid:{{drawOnChartArea:false}},title:{{display:true,text:'CPM (EUR)',color:t0.muted}}}} }};
 charts.push(new Chart(document.getElementById('ratioChart'),{{type:'line',data:{{labels:DATES,datasets:[
-  {{label:'Rubicon Win Rate',data:DATES.map(d=>winRate('Rubicon',d)),borderColor:COLORS[0],backgroundColor:COLORS[0],yAxisID:'y',pointRadius:2,tension:0.25}},
-  {{label:'MagniteDirect Win Rate',data:DATES.map(d=>winRate('MagniteDirect',d)),borderColor:COLORS[1],backgroundColor:COLORS[1],yAxisID:'y',pointRadius:2,tension:0.25}},
+  {{label:'Rubicon HB Win Rate',data:DATES.map(d=>winRate('Rubicon',d)),borderColor:COLORS[0],backgroundColor:COLORS[0],yAxisID:'y',pointRadius:2,tension:0.25}},
+  {{label:'MagniteDirect HB Win Rate',data:DATES.map(d=>winRate('MagniteDirect',d)),borderColor:COLORS[1],backgroundColor:COLORS[1],yAxisID:'y',pointRadius:2,tension:0.25}},
+  {{label:'Rubicon Auction Win Rate',data:DATES.map(d=>auctionWinRate('Rubicon',d)),borderColor:COLORS[2],backgroundColor:COLORS[2],yAxisID:'y',pointRadius:2,tension:0.25}},
+  {{label:'MagniteDirect Auction Win Rate',data:DATES.map(d=>auctionWinRate('MagniteDirect',d)),borderColor:COLORS[6],backgroundColor:COLORS[6],yAxisID:'y',pointRadius:2,tension:0.25}},
   {{label:'Rubicon CPM',data:DATES.map(d=>cpm('Rubicon',d)),borderColor:COLORS[3],backgroundColor:COLORS[3],yAxisID:'y2',borderDash:[5,4],pointRadius:2,tension:0.25}},
   {{label:'MagniteDirect CPM',data:DATES.map(d=>cpm('MagniteDirect',d)),borderColor:COLORS[5],backgroundColor:COLORS[5],yAxisID:'y2',borderDash:[5,4],pointRadius:2,tension:0.25}}
 ]}},options:opt}}));
@@ -430,7 +501,8 @@ opt.scales={{ x:{{ticks:{{color:t0.muted}},grid:{{color:t0.border}}}},
   y2:{{position:'right',ticks:{{color:t0.muted,callback:v=>(v*100).toFixed(0)+'%'}},grid:{{drawOnChartArea:false}},title:{{display:true,text:'Win Rate',color:t0.muted}}}} }};
 charts.push(new Chart(document.getElementById('rampChart'),{{data:{{labels:MD_DATES,datasets:[
   {{type:'bar',label:'MagniteDirect Gross (EUR)',data:MD_DATES.map(d=>get('MagniteDirect',d,'g')),backgroundColor:'#FF6B7C',yAxisID:'y'}},
-  {{type:'line',label:'Win Rate',data:MD_DATES.map(d=>winRate('MagniteDirect',d)),borderColor:COLORS[0],backgroundColor:COLORS[0],yAxisID:'y2',pointRadius:2,tension:0.25}}
+  {{type:'line',label:'HB Win Rate',data:MD_DATES.map(d=>winRate('MagniteDirect',d)),borderColor:COLORS[0],backgroundColor:COLORS[0],yAxisID:'y2',pointRadius:2,tension:0.25}},
+  {{type:'line',label:'Auction Win Rate',data:MD_DATES.map(d=>auctionWinRate('MagniteDirect',d)),borderColor:COLORS[5],backgroundColor:COLORS[5],yAxisID:'y2',pointRadius:2,tension:0.25}}
 ]}},options:opt}}));
 }}
 
@@ -448,7 +520,7 @@ document.getElementById('s2Summary').textContent=
 const tbl=document.getElementById('pivotTable');
 const metrics=[['Gross Revenue','g',v=>v==null?'—':'€'+v.toLocaleString('en-US',{{minimumFractionDigits:2,maximumFractionDigits:2}})],
                ['CPM','c',v=>v==null?'—':'€'+v.toFixed(2)],
-               ['Win Rate','w',v=>v==null?'—':(v*100).toFixed(1)+'%']];
+               ['HB Win Rate','w',v=>v==null?'—':(v*100).toFixed(1)+'%']];
 let h='<thead><tr><th class="pub">Publisher</th><th style="text-align:left">Channel</th><th style="text-align:left">Metric</th>';
 DATES.forEach(d=>h+='<th>'+d.slice(5)+'</th>');
 h+='</tr></thead><tbody>';
@@ -469,6 +541,30 @@ h+='</tbody>';
 tbl.innerHTML=h;
 document.getElementById('pivotSummary').textContent=
   PIVOT.order.length+' publishers are live on both channels; the biggest MagniteDirect contributor is '+PIVOT.order[0]+'.';
+}}
+
+{{
+const FUNNEL = {json.dumps(kw['funnel'])};
+const tbl=document.getElementById('funnelTable');
+const fmtInt=v=>v==null?'—':v.toLocaleString('en-US');
+const fmtPctF=v=>v==null?'—':(v*100).toFixed(1)+'%';
+let h='<thead><tr><th class="pub">Publisher</th><th style="text-align:left">Channel</th><th style="text-align:left">Editorial group</th><th style="text-align:left">Source type</th>'
+ +'<th>Bid Inputs</th><th>Bids</th><th>Wins</th><th>HB Wins</th><th>Imps Sold</th>'
+ +'<th>Gross Rev (EUR)</th><th>OMP Gross (EUR)</th><th>Bid Rate</th><th>Auction Win Rate</th><th>HB Win Rate</th><th>RPM (EUR)</th></tr></thead><tbody>';
+FUNNEL.forEach(r=>{{
+  h+='<tr class="'+(r.ch==='MagniteDirect'?'md-row':'')+'">';
+  h+='<td class="pub">'+r.pub+'</td><td class="chan">'+r.ch+'</td><td class="chan">'+(r.eg||'—')+'</td><td class="chan">'+r.st+'</td>';
+  h+='<td>'+fmtInt(r.bi)+'</td><td>'+fmtInt(r.bids)+'</td><td>'+fmtInt(r.wins)+'</td><td>'+fmtInt(r.hw)+'</td><td>'+fmtInt(r.is)+'</td>';
+  h+='<td>'+fmtEUR(r.g)+'</td><td>'+fmtEUR(r.og)+'</td>';
+  h+='<td>'+fmtPctF(r.br)+'</td><td>'+fmtPctF(r.awr)+'</td>';
+  h+='<td>'+(r.st==='HeaderBidding'?fmtPctF(r.hwr):'—')+'</td>';
+  h+='<td>'+(r.rpm==null?'—':'€'+r.rpm.toFixed(2))+'</td></tr>';
+}});
+h+='</tbody>';
+tbl.innerHTML=h;
+const nMD=FUNNEL.filter(r=>r.ch==='MagniteDirect').length;
+document.getElementById('funnelSummary').textContent=
+  FUNNEL.length+' publisher × channel × source-type rows ('+nMD+' on MagniteDirect), sorted by Gross Revenue; raw funnel counts shown so every ratio can be audited.';
 }}
 
 function rethemeCharts() {{
