@@ -64,7 +64,7 @@ DAILY = {}
 for d,ch,g,pr,w,hw,ip in daily:
     DAILY.setdefault(ch,{})[d] = {"g":g,"pr":pr,"w":w,"hw":hw,"ip":ip}
 
-pivot = json.load(open("/Users/jperez/Desktop/Seedtag/notebooks/magnite_direct/pub_pivot.json"))
+pivot = json.load(open("/Users/jperez/Desktop/Seedtag/notebooks/magnite_direct_tracking/pub_pivot.json"))
 
 KPI = {
   "rubicon_july_gross": 3731480.21,
@@ -402,6 +402,6 @@ document.getElementById('theme-toggle').addEventListener('click',()=>{{
 </body>
 </html>"""
 
-out='/Users/jperez/Desktop/Seedtag/notebooks/magnite_direct/magnite_connection_health_2026-08-03.html'
+out='/Users/jperez/Desktop/Seedtag/notebooks/magnite_direct_tracking/magnite_connection_health_2026-08-03.html'
 open(out,'w').write(html)
 print('written', out, len(html))
