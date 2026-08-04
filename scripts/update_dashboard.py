@@ -110,9 +110,24 @@ WHERE f.date BETWEEN DATE '{d1}' AND DATE '{d2}'
   AND f.publisher_name IN (SELECT publisher_name FROM magnite_publishers)
 GROUP BY 1, 2, 3, 4, 5, 6"""
 
+    sql_requests = f"""{TAG}
+SELECT date, editorial_group_name,
+       SUM(ssp_channel_requests) AS channel_requests
+FROM st_datalakehouse.analytics.stg_ssp_events_daily
+WHERE date BETWEEN DATE '{d1}' AND DATE '{d2}'
+  AND channel_id = 'MagniteDirect'
+GROUP BY 1, 2
+ORDER BY 1, 3 DESC"""
+
     print("querying supply funnel (daily x all dimensions, MagniteDirect publishers)...", flush=True)
     rows = run_trino_query(sql_main)
     print(f"  {len(rows)} rows", flush=True)
+    print("querying daily channel requests by editorial group...", flush=True)
+    req_rows = run_trino_query(sql_requests)
+    REQ = [[(dt.date.fromisoformat(str(r["date"])[:10]) - start).days,
+            r["editorial_group_name"] or "(none)",
+            int(r["channel_requests"] or 0)] for r in req_rows]
+    print(f"  {len(REQ)} rows, {len({x[1] for x in REQ})} editorial groups", flush=True)
 
     B = [pack(r, start) for r in rows]
 
@@ -147,7 +162,7 @@ GROUP BY 1, 2, 3, 4, 5, 6"""
         print(f"  missing partitions: {pending} (restored from snapshot: {restored})", flush=True)
 
     html = render_html(
-        B=B, d1=d1, d2=d2,
+        B=B, REQ=REQ, sql_requests=sql_requests, d1=d1, d2=d2,
         n_days=(end - start).days + 1,
         md_launch=MD_LAUNCH.isoformat(),
         sql_main=sql_main,
@@ -401,7 +416,14 @@ tr.sub-row td.pub {{ padding-left:28px; color:var(--text-muted); }}
 </section>
 
 <section>
-<h2>3 · Editorial group / publisher head-to-head {tooltip(kw['sql_main'])}</h2>
+<h2>3 · Requests sent to MagniteDirect by editorial group {tooltip(kw['sql_requests'])}</h2>
+<div class="chart-box"><div id="reqLegend" class="group-legend"></div><div style="position:relative;height:320px"><canvas id="reqChart"></canvas></div></div>
+<p class="summary-line" id="reqSummary"></p>
+<p class="data-footer">Source: SSP events daily (stg_ssp_events_daily) — MagniteDirect channel, all products, {kw['d1']} – {kw['d2']}. Requests are outbound bid requests Seedtag forwards to the MagniteDirect demand channel (not bid inputs). Log scale — volumes are heavily skewed. Respects the Editorial Group filter only.</p>
+</section>
+
+<section>
+<h2>4 · Editorial group / publisher head-to-head {tooltip(kw['sql_main'])}</h2>
 <div class="tbl-actions"><button onclick="setExpandAll('pivot',true)">Expand all</button><button onclick="setExpandAll('pivot',false)">Collapse all</button></div>
 <div class="pivot-wrap"><table class="report-table" id="pivotTable"></table></div>
 <p class="summary-line" id="pivotSummary"></p>
@@ -409,7 +431,7 @@ tr.sub-row td.pub {{ padding-left:28px; color:var(--text-muted); }}
 </section>
 
 <section>
-<h2>4 · Funnel health by editorial group {tooltip(kw['sql_main'])}</h2>
+<h2>5 · Funnel health by editorial group {tooltip(kw['sql_main'])}</h2>
 <div class="tbl-actions"><button onclick="setExpandAll('funnel',true)">Expand all</button><button onclick="setExpandAll('funnel',false)">Collapse all</button></div>
 <div class="pivot-wrap"><table class="report-table" id="funnelTable"></table></div>
 <p class="summary-line" id="funnelSummary"></p>
@@ -421,6 +443,7 @@ tr.sub-row td.pub {{ padding-left:28px; color:var(--text-muted); }}
 <script>
 // Row layout: [dIdx, isMD, eg, st, adunit, pub, gross, ompGross, pubRev, bids, wins, hbWins, impsSold, impsPaid]
 const B = {json.dumps(kw['B'])};
+const REQ = {json.dumps(kw['REQ'])};  // [dIdx, editorial_group, channel_requests]
 const N_DAYS = {kw['n_days']};
 const DATES = Array.from({{length:N_DAYS}}, (_,i)=>{{const d=new Date(Date.UTC({int(kw['d1'][:4])},{int(kw['d1'][5:7])-1},{int(kw['d1'][8:10])}+i));return d.toISOString().slice(0,10);}});
 const PENDING = new Set({json.dumps(kw['pending'])});
@@ -597,6 +620,37 @@ function buildGroupLegend(chart,containerId,groups){{
   }}));
 }}
 
+
+// Section 3: daily requests to MagniteDirect, one line per editorial group
+let reqChart;
+function buildReqChart(){{
+  const t=themeOpts();
+  const eg=selEG.value;
+  const groups={{}};
+  REQ.forEach(([di,g,v])=>{{ if(eg&&g!==eg) return; (groups[g]=groups[g]||Array(N_DAYS).fill(null))[di]=v; }});
+  const totals=Object.fromEntries(Object.entries(groups).map(([g,a])=>[g,a.reduce((s,v)=>s+(v||0),0)]));
+  const order=Object.keys(groups).sort((a,b)=>totals[b]-totals[a]);
+  const fmtM=v=>v==null?'—':(v>=1e6?(v/1e6).toFixed(1)+'M':v.toLocaleString('en-US'));
+  const datasets=order.map((g,i)=>({{label:g,data:groups[g],
+    borderColor:COLORS[i%COLORS.length],backgroundColor:COLORS[i%COLORS.length],
+    pointRadius:2,tension:0.25}}));
+  if(!reqChart){{
+    const o=baseOpts(t);
+    o.plugins.legend.display=false;
+    o.plugins.tooltip.callbacks={{label:c=>c.dataset.label+': '+fmtM(c.parsed.y)}};
+    o.scales={{x:{{ticks:{{color:t.muted}},grid:{{color:t.border}}}},
+      y:{{type:'logarithmic',ticks:{{color:t.muted,callback:v=>fmtM(Number(v))}},grid:{{color:t.border}},title:{{display:true,text:'Requests (log scale)',color:t.muted}}}}}};
+    reqChart=new Chart(document.getElementById('reqChart'),{{type:'line',data:{{labels:LABELS,datasets}},options:o}}); charts.push(reqChart);
+  }} else {{
+    reqChart.data={{labels:LABELS,datasets}};
+    reqChart.update('none');
+  }}
+  buildGroupLegend(reqChart,'reqLegend',[['Editorial Group',order.map((g,i)=>[i,g])]]);
+  const top=order[0];
+  document.getElementById('reqSummary').textContent=order.length+' editorial groups receive MagniteDirect requests'
+    +(top?'; the largest is '+top+' with '+fmtM(totals[top])+' over the window':'')+'.';
+}}
+
 // ---------- expand/collapse ----------
 const expanded={{pivot:new Set(),funnel:new Set()}};
 function toggleEG(tbl,key){{ const s=expanded[tbl]; s.has(key)?s.delete(key):s.add(key); (tbl==='pivot'?renderPivot:renderFunnel)(); }}
@@ -727,7 +781,7 @@ function renderFunnel(){{
 }}
 
 // ---------- wiring ----------
-function renderAll(){{ renderKPIs(); buildCharts(); renderPivot(); renderFunnel(); }}
+function renderAll(){{ renderKPIs(); buildCharts(); buildReqChart(); renderPivot(); renderFunnel(); }}
 [selEG,selST,selAU,selPUB].forEach(s=>s.addEventListener('change',renderAll));
 renderAll();
 
