@@ -111,13 +111,21 @@ WHERE f.date BETWEEN DATE '{d1}' AND DATE '{d2}'
 GROUP BY 1, 2, 3, 4, 5, 6"""
 
     sql_requests = f"""{TAG}
-SELECT date, editorial_group_name,
+WITH magnite_publishers AS (
+  SELECT DISTINCT publisher_name
+  FROM {TABLE}
+  WHERE date BETWEEN DATE '{d1}' AND DATE '{d2}'
+    AND channel_id = 'MagniteDirect'
+    AND source_type IS DISTINCT FROM 'Beachfront'
+)
+SELECT date, channel_id, editorial_group_name, publisher_name, source_type,
        SUM(ssp_channel_requests) AS channel_requests
 FROM st_datalakehouse.analytics.stg_ssp_events_daily
 WHERE date BETWEEN DATE '{d1}' AND DATE '{d2}'
-  AND channel_id = 'MagniteDirect'
-GROUP BY 1, 2
-ORDER BY 1, 3 DESC"""
+  AND channel_id IN ('Rubicon', 'MagniteDirect')
+  AND publisher_name IN (SELECT publisher_name FROM magnite_publishers)
+GROUP BY 1, 2, 3, 4, 5
+ORDER BY 1, 6 DESC"""
 
     print("querying supply funnel (daily x all dimensions, MagniteDirect publishers)...", flush=True)
     rows = run_trino_query(sql_main)
@@ -125,9 +133,12 @@ ORDER BY 1, 3 DESC"""
     print("querying daily channel requests by editorial group...", flush=True)
     req_rows = run_trino_query(sql_requests)
     REQ = [[(dt.date.fromisoformat(str(r["date"])[:10]) - start).days,
+            1 if r["channel_id"] == "MagniteDirect" else 0,
             r["editorial_group_name"] or "(none)",
+            r["source_type"] or "",
+            r["publisher_name"] or "",
             int(r["channel_requests"] or 0)] for r in req_rows]
-    print(f"  {len(REQ)} rows, {len({x[1] for x in REQ})} editorial groups", flush=True)
+    print(f"  {len(REQ)} rows, {len({x[2] for x in REQ})} editorial groups", flush=True)
 
     B = [pack(r, start) for r in rows]
 
@@ -378,6 +389,7 @@ tr.sub-row td.pub {{ padding-left:28px; color:var(--text-muted); }}
   <div><label for="f-pub">Publisher</label><select id="f-pub"><option value="">All publishers</option></select></div>
   <div><label for="f-st">Source Type</label><select id="f-st"><option value="">All source types</option></select></div>
   <div><label for="f-au">Ad Unit Type</label><select id="f-au"><option value="">All ad unit types</option></select></div>
+  <div><label for="f-month">Month</label><select id="f-month"><option value="">All months</option></select></div>
 </div>
 
 <div class="kpi-block">
@@ -435,7 +447,7 @@ tr.sub-row td.pub {{ padding-left:28px; color:var(--text-muted); }}
 <div class="tbl-actions"><button onclick="setExpandAll('funnel',true)">Expand all</button><button onclick="setExpandAll('funnel',false)">Collapse all</button></div>
 <div class="pivot-wrap"><table class="report-table" id="funnelTable"></table></div>
 <p class="summary-line" id="funnelSummary"></p>
-<p class="data-footer">Source: Daily supply funnel — publishers with MagniteDirect activity, all products (OMP-only revenue also shown), {kw['d1']} – {kw['d2']}, revenue in EUR. Funnel order: bid inputs → bids → wins → (HB only: hb wins → hb inserts) → imps sold. {wr_note} Main rows = editorial group × channel (click to expand publishers); slice with the filters at the top.</p>
+<p class="data-footer">Source: Daily supply funnel — publishers with MagniteDirect activity, all products (OMP-only revenue also shown), {kw['d1']} – {kw['d2']}, revenue in EUR. Requests are outbound bid requests to the channel (from stg_ssp_events_daily; not sliced by ad unit). Funnel order: requests → wins → (HB only: hb wins → hb inserts) → imps sold. {wr_note} Main rows = editorial group × channel (click to expand publishers); slice with the filters at the top.</p>
 </section>
 
 <footer class="report-footer">{LOGO20}<span>Analytics Team · Magnite Connection Health — Rubicon vs MagniteDirect · {kw['d1']} → {kw['d2']}</span></footer>
@@ -443,7 +455,7 @@ tr.sub-row td.pub {{ padding-left:28px; color:var(--text-muted); }}
 <script>
 // Row layout: [dIdx, isMD, eg, st, adunit, pub, gross, ompGross, pubRev, bids, wins, hbWins, impsSold, impsPaid]
 const B = {json.dumps(kw['B'])};
-const REQ = {json.dumps(kw['REQ'])};  // [dIdx, editorial_group, channel_requests]
+const REQ = {json.dumps(kw['REQ'])};  // [dIdx, isMD, eg, source_type, pub, channel_requests]
 const N_DAYS = {kw['n_days']};
 const DATES = Array.from({{length:N_DAYS}}, (_,i)=>{{const d=new Date(Date.UTC({int(kw['d1'][:4])},{int(kw['d1'][5:7])-1},{int(kw['d1'][8:10])}+i));return d.toISOString().slice(0,10);}});
 const PENDING = new Set({json.dumps(kw['pending'])});
@@ -473,7 +485,20 @@ const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'
 
 // ---------- filters ----------
 const selEG=document.getElementById('f-eg'), selST=document.getElementById('f-st'),
-      selAU=document.getElementById('f-au'), selPUB=document.getElementById('f-pub');
+      selAU=document.getElementById('f-au'), selPUB=document.getElementById('f-pub'),
+      selMONTH=document.getElementById('f-month');
+{{
+  const months=[...new Set(DATES.map(d=>d.slice(0,7)))];
+  months.forEach(m=>selMONTH.insertAdjacentHTML('beforeend','<option value="'+m+'">'+m+'</option>'));
+}}
+let LO=0, HI=N_DAYS-1, IDXS=[];
+function computeRange(){{
+  const m=selMONTH.value;
+  LO=0; HI=N_DAYS-1;
+  if(m){{ const idx=DATES.map((d,i)=>[d,i]).filter(([d])=>d.startsWith(m)).map(([,i])=>i);
+         LO=idx[0]; HI=idx[idx.length-1]; }}
+  IDXS=[]; for(let i=LO;i<=HI;i++) IDXS.push(i);
+}}
 {{
   const fill=(sel,idx)=>{{
     [...new Set(B.map(r=>r[idx]).filter(Boolean))].sort((a,b)=>a.localeCompare(b))
@@ -483,13 +508,18 @@ const selEG=document.getElementById('f-eg'), selST=document.getElementById('f-st
 }}
 function filt(rows){{
   const eg=selEG.value, st=selST.value, au=selAU.value, pub=selPUB.value;
-  return rows.filter(r=>(!eg||r[2]===eg)&&(!st||r[3]===st)&&(!au||r[4]===au)&&(!pub||r[5]===pub));
+  return rows.filter(r=>r[0]>=LO&&r[0]<=HI&&(!eg||r[2]===eg)&&(!st||r[3]===st)&&(!au||r[4]===au)&&(!pub||r[5]===pub));
+}}
+// requests rows have no ad-unit dimension: honor every other filter
+function filtReq(){{
+  const eg=selEG.value, st=selST.value, pub=selPUB.value;
+  return REQ.filter(r=>r[0]>=LO&&r[0]<=HI&&(!eg||r[2]===eg)&&(!st||r[3]===st)&&(!pub||r[4]===pub));
 }}
 
 // zero-filled accumulator; family-split fields feed the two rate metrics:
 // hbW/hbHW = wins/hb_wins on HB-family rows -> Win Rate (HB) = hbHW/hbW
 // tagW/tagIS = wins/imps_sold on non-HB rows -> Imp Rate (Tag) = tagIS/tagW
-function zeroAcc(){{return {{g:0,og:0,pr:0,bids:0,wins:0,hw:0,is:0,ip:0,hbW:0,hbHW:0,tagW:0,tagIS:0}};}}
+function zeroAcc(){{return {{g:0,og:0,pr:0,bids:0,wins:0,hw:0,is:0,ip:0,hbW:0,hbHW:0,tagW:0,tagIS:0,req:0}};}}
 function addTo(acc,row){{
   for(const k in M) acc[k]+=row[B0+M[k]]||0;
   if(HB_FAMILY.has(row[3])){{ acc.hbW+=row[B0+M.wins]||0; acc.hbHW+=row[B0+M.hw]||0; }}
@@ -540,29 +570,31 @@ function buildCharts(){{
   const t=themeOpts();
   const D=dailySeries();
   const gap=(i,v)=>PENDING.has(DATES[i])&&!v?null:(v||null);
-  const revData={{labels:LABELS,datasets:[
-    {{type:'line',label:'Rubicon Bids',data:DATES.map((_,i)=>gap(i,D[0][i].bids)),borderColor:COLORS[2],backgroundColor:COLORS[2],yAxisID:'y2',pointRadius:2,tension:0.25}},
-    {{type:'line',label:'MagniteDirect Bids',data:DATES.map((_,i)=>gap(i,D[1][i].bids)),borderColor:COLORS[6],backgroundColor:COLORS[6],yAxisID:'y2',pointRadius:2,tension:0.25}},
-    {{label:'Rubicon Gross',data:DATES.map((_,i)=>gap(i,D[0][i].g)),backgroundColor:COLORS[0]}},
-    {{label:'Rubicon Publisher Rev',data:DATES.map((_,i)=>gap(i,D[0][i].pr)),backgroundColor:COLORS[3]}},
-    {{label:'MagniteDirect Gross',data:DATES.map((_,i)=>gap(i,D[1][i].g)),backgroundColor:COLORS[1]}},
-    {{label:'MagniteDirect Publisher Rev',data:DATES.map((_,i)=>gap(i,D[1][i].pr)),backgroundColor:COLORS[5]}}
+  const VL=IDXS.map(i=>LABELS[i]);
+  const revData={{labels:VL,datasets:[
+    {{type:'line',label:'Rubicon Bids',data:IDXS.map(i=>gap(i,D[0][i].bids)),borderColor:COLORS[2],backgroundColor:COLORS[2],yAxisID:'y2',pointRadius:2,tension:0.25}},
+    {{type:'line',label:'MagniteDirect Bids',data:IDXS.map(i=>gap(i,D[1][i].bids)),borderColor:COLORS[6],backgroundColor:COLORS[6],yAxisID:'y2',pointRadius:2,tension:0.25}},
+    {{label:'Rubicon Gross',data:IDXS.map(i=>gap(i,D[0][i].g)),backgroundColor:COLORS[0]}},
+    {{label:'Rubicon Publisher Rev',data:IDXS.map(i=>gap(i,D[0][i].pr)),backgroundColor:COLORS[3]}},
+    {{label:'MagniteDirect Gross',data:IDXS.map(i=>gap(i,D[1][i].g)),backgroundColor:COLORS[1]}},
+    {{label:'MagniteDirect Publisher Rev',data:IDXS.map(i=>gap(i,D[1][i].pr)),backgroundColor:COLORS[5]}}
   ]}};
-  const ratioData={{labels:LABELS,datasets:[
-    {{label:'Rubicon Win Rate (HB)',data:DATES.map((_,i)=>div(D[0][i].hbHW,D[0][i].hbW)),borderColor:COLORS[0],backgroundColor:COLORS[0],yAxisID:'y',pointRadius:2,tension:0.25}},
-    {{label:'MagniteDirect Win Rate (HB)',data:DATES.map((_,i)=>div(D[1][i].hbHW,D[1][i].hbW)),borderColor:COLORS[1],backgroundColor:COLORS[1],yAxisID:'y',pointRadius:2,tension:0.25}},
-    {{label:'Rubicon Imp Rate (Tag)',data:DATES.map((_,i)=>div(D[0][i].tagIS,D[0][i].tagW)),borderColor:COLORS[2],backgroundColor:COLORS[2],yAxisID:'y',pointRadius:2,tension:0.25}},
-    {{label:'MagniteDirect Imp Rate (Tag)',data:DATES.map((_,i)=>div(D[1][i].tagIS,D[1][i].tagW)),borderColor:COLORS[6],backgroundColor:COLORS[6],yAxisID:'y',pointRadius:2,tension:0.25}},
-    {{label:'Rubicon CPM',data:DATES.map((_,i)=>D[0][i].ip?D[0][i].pr*1000/D[0][i].ip:null),borderColor:COLORS[3],backgroundColor:COLORS[3],yAxisID:'y2',borderDash:[5,4],pointRadius:2,tension:0.25}},
-    {{label:'MagniteDirect CPM',data:DATES.map((_,i)=>D[1][i].ip?D[1][i].pr*1000/D[1][i].ip:null),borderColor:COLORS[5],backgroundColor:COLORS[5],yAxisID:'y2',borderDash:[5,4],pointRadius:2,tension:0.25}}
+  const ratioData={{labels:VL,datasets:[
+    {{label:'Rubicon Win Rate (HB)',data:IDXS.map(i=>div(D[0][i].hbHW,D[0][i].hbW)),borderColor:COLORS[0],backgroundColor:COLORS[0],yAxisID:'y',pointRadius:2,tension:0.25}},
+    {{label:'MagniteDirect Win Rate (HB)',data:IDXS.map(i=>div(D[1][i].hbHW,D[1][i].hbW)),borderColor:COLORS[1],backgroundColor:COLORS[1],yAxisID:'y',pointRadius:2,tension:0.25}},
+    {{label:'Rubicon Imp Rate (Tag)',data:IDXS.map(i=>div(D[0][i].tagIS,D[0][i].tagW)),borderColor:COLORS[2],backgroundColor:COLORS[2],yAxisID:'y',pointRadius:2,tension:0.25}},
+    {{label:'MagniteDirect Imp Rate (Tag)',data:IDXS.map(i=>div(D[1][i].tagIS,D[1][i].tagW)),borderColor:COLORS[6],backgroundColor:COLORS[6],yAxisID:'y',pointRadius:2,tension:0.25}},
+    {{label:'Rubicon CPM',data:IDXS.map(i=>D[0][i].ip?D[0][i].pr*1000/D[0][i].ip:null),borderColor:COLORS[3],backgroundColor:COLORS[3],yAxisID:'y2',borderDash:[5,4],pointRadius:2,tension:0.25}},
+    {{label:'MagniteDirect CPM',data:IDXS.map(i=>D[1][i].ip?D[1][i].pr*1000/D[1][i].ip:null),borderColor:COLORS[5],backgroundColor:COLORS[5],yAxisID:'y2',borderDash:[5,4],pointRadius:2,tension:0.25}}
   ]}};
-  const rampData={{labels:MD_IDX.map(i=>LABELS[i]),datasets:[
-    {{type:'bar',label:'MagniteDirect Gross (EUR)',data:MD_IDX.map(i=>gap(i,D[1][i].g)),backgroundColor:'#FF6B7C',yAxisID:'y'}},
-    {{type:'bar',label:'Rubicon Gross (EUR)',data:MD_IDX.map(i=>gap(i,D[0][i].g)),backgroundColor:COLORS[0],yAxisID:'y'}},
-    {{type:'line',label:'MagniteDirect Win Rate (HB)',data:MD_IDX.map(i=>div(D[1][i].hbHW,D[1][i].hbW)),borderColor:COLORS[1],backgroundColor:COLORS[1],yAxisID:'y2',pointRadius:2,tension:0.25}},
-    {{type:'line',label:'Rubicon Win Rate (HB)',data:MD_IDX.map(i=>div(D[0][i].hbHW,D[0][i].hbW)),borderColor:COLORS[2],backgroundColor:COLORS[2],yAxisID:'y2',pointRadius:2,tension:0.25}},
-    {{type:'line',label:'MagniteDirect Imp Rate (Tag)',data:MD_IDX.map(i=>div(D[1][i].tagIS,D[1][i].tagW)),borderColor:COLORS[5],backgroundColor:COLORS[5],yAxisID:'y2',borderDash:[5,4],pointRadius:2,tension:0.25}},
-    {{type:'line',label:'Rubicon Imp Rate (Tag)',data:MD_IDX.map(i=>div(D[0][i].tagIS,D[0][i].tagW)),borderColor:COLORS[6],backgroundColor:COLORS[6],yAxisID:'y2',borderDash:[5,4],pointRadius:2,tension:0.25}}
+  const RIDX=IDXS.filter(i=>DATES[i]>=MD_LAUNCH);
+  const rampData={{labels:RIDX.map(i=>LABELS[i]),datasets:[
+    {{type:'bar',label:'MagniteDirect Gross (EUR)',data:RIDX.map(i=>gap(i,D[1][i].g)),backgroundColor:'#FF6B7C',yAxisID:'y'}},
+    {{type:'bar',label:'Rubicon Gross (EUR)',data:RIDX.map(i=>gap(i,D[0][i].g)),backgroundColor:COLORS[0],yAxisID:'y'}},
+    {{type:'line',label:'MagniteDirect Win Rate (HB)',data:RIDX.map(i=>div(D[1][i].hbHW,D[1][i].hbW)),borderColor:COLORS[1],backgroundColor:COLORS[1],yAxisID:'y2',pointRadius:2,tension:0.25}},
+    {{type:'line',label:'Rubicon Win Rate (HB)',data:RIDX.map(i=>div(D[0][i].hbHW,D[0][i].hbW)),borderColor:COLORS[2],backgroundColor:COLORS[2],yAxisID:'y2',pointRadius:2,tension:0.25}},
+    {{type:'line',label:'MagniteDirect Imp Rate (Tag)',data:RIDX.map(i=>div(D[1][i].tagIS,D[1][i].tagW)),borderColor:COLORS[5],backgroundColor:COLORS[5],yAxisID:'y2',borderDash:[5,4],pointRadius:2,tension:0.25}},
+    {{type:'line',label:'Rubicon Imp Rate (Tag)',data:RIDX.map(i=>div(D[0][i].tagIS,D[0][i].tagW)),borderColor:COLORS[6],backgroundColor:COLORS[6],yAxisID:'y2',borderDash:[5,4],pointRadius:2,tension:0.25}}
   ]}};
 
   if(!revChart){{
@@ -592,7 +624,7 @@ function buildCharts(){{
     charts.forEach(c=>c.update('none'));
   }}
 
-  const li=N_DAYS-1;
+  const li=HI;
   const pendNote=PENDING.size?' Dates marked * are pending warehouse restore.':'';
   document.getElementById('s1Summary').textContent=
     'Latest closed day ('+DATES[li]+'): Rubicon '+fmtEUR(D[0][li].g||null)+' Gross vs MagniteDirect '+fmtEUR(D[1][li].g||null)+' (MagniteDirect publishers only).'+pendNote;
@@ -625,13 +657,13 @@ function buildGroupLegend(chart,containerId,groups){{
 let reqChart;
 function buildReqChart(){{
   const t=themeOpts();
-  const eg=selEG.value;
   const groups={{}};
-  REQ.forEach(([di,g,v])=>{{ if(eg&&g!==eg) return; (groups[g]=groups[g]||Array(N_DAYS).fill(null))[di]=v; }});
+  filtReq().forEach(([di,ch,g,st,pub,v])=>{{ if(ch!==1) return;
+    const a=(groups[g]=groups[g]||Array(N_DAYS).fill(null)); a[di]=(a[di]||0)+v; }});
   const totals=Object.fromEntries(Object.entries(groups).map(([g,a])=>[g,a.reduce((s,v)=>s+(v||0),0)]));
   const order=Object.keys(groups).sort((a,b)=>totals[b]-totals[a]);
   const fmtM=v=>v==null?'—':(v>=1e6?(v/1e6).toFixed(1)+'M':v.toLocaleString('en-US'));
-  const datasets=order.map((g,i)=>({{label:g,data:groups[g],
+  const datasets=order.map((g,i)=>({{label:g,data:IDXS.map(x=>groups[g][x]),
     borderColor:COLORS[i%COLORS.length],backgroundColor:COLORS[i%COLORS.length],
     pointRadius:2,tension:0.25}}));
   // pad the log axis so the lines sit near the middle rather than hugging the top
@@ -644,9 +676,9 @@ function buildReqChart(){{
     o.plugins.tooltip.callbacks={{label:c=>c.dataset.label+': '+fmtM(c.parsed.y)}};
     o.scales={{x:{{ticks:{{color:t.muted}},grid:{{color:t.border}}}},
       y:{{type:'logarithmic',min:yMin,max:yMax,ticks:{{color:t.muted,callback:v=>fmtM(Number(v))}},grid:{{color:t.border}},title:{{display:true,text:'Requests (log scale)',color:t.muted}}}}}};
-    reqChart=new Chart(document.getElementById('reqChart'),{{type:'line',data:{{labels:LABELS,datasets}},options:o}}); charts.push(reqChart);
+    reqChart=new Chart(document.getElementById('reqChart'),{{type:'line',data:{{labels:IDXS.map(i=>LABELS[i]),datasets}},options:o}}); charts.push(reqChart);
   }} else {{
-    reqChart.data={{labels:LABELS,datasets}};
+    reqChart.data={{labels:IDXS.map(i=>LABELS[i]),datasets}};
     reqChart.options.scales.y.min=yMin; reqChart.options.scales.y.max=yMax;
     reqChart.update('none');
   }}
@@ -677,18 +709,25 @@ function pivotAgg(){{
     }}
     egTot[kEg]=(egTot[kEg]||0)+(ci===1?r[B0+M.g]:0);
   }});
+  filtReq().forEach(([di,ci,g,st,pn,v])=>{{
+    const kEg=g||'(none)';
+    for(const [store,key] of [[eg,kEg],[pub,kEg+'\u0000'+pn]]){{
+      if(!store[key]) store[key]=[Array.from({{length:N_DAYS}},zeroAcc),Array.from({{length:N_DAYS}},zeroAcc)];
+      store[key][ci][di].req+=v;
+    }}
+  }});
   return {{eg,pub,egTot}};
 }}
 let pivotCache=null;
 function pivotKeys(){{ return Object.keys(pivotCache.eg); }}
 const PIVOT_METRICS=[
   ['Gross Revenue',a=>a.g?fmtEUR(a.g):(a.g===0?'—':fmtEUR(a.g))],
-  ['Bids',a=>a.bids?fmtInt(a.bids):'—'],
+  ['Requests',a=>a.req?fmtInt(a.req):'—'],
   ['CPM',a=>a.ip?'€'+(a.pr*1000/a.ip).toFixed(2):'—'],
   ['Win Rate (HB)',a=>a.hbW?fmtPct(a.hbHW/a.hbW):'—'],
   ['Imp Rate (Tag)',a=>a.tagW?fmtPct(a.tagIS/a.tagW):'—'],
 ];
-function hasData(perDay){{ return perDay.some(a=>a.g||a.wins||a.ip); }}
+function hasData(perDay){{ return perDay.some(a=>a.g||a.wins||a.ip||a.req); }}
 function pivotRows(label,perCh,subCls){{
   let h='', labelDone=false, firstRow=true;
   ['MagniteDirect','Rubicon'].forEach(ch=>{{
@@ -700,7 +739,7 @@ function pivotRows(label,perCh,subCls){{
       h+='<td class="pub">'+(labelDone?'':label)+'</td>';
       labelDone=true; firstRow=false;
       h+='<td class="chan">'+(mi===0?ch:'')+'</td><td class="met">'+m[0]+'</td>';
-      for(let i=0;i<N_DAYS;i++) h+='<td>'+m[1](perCh[ci][i])+'</td>';
+      IDXS.forEach(i=>{{ h+='<td>'+m[1](perCh[ci][i])+'</td>'; }});
       h+='</tr>';
     }});
   }});
@@ -711,7 +750,7 @@ function renderPivot(){{
   const {{eg,pub,egTot}}=pivotCache;
   const order=Object.keys(eg).sort((a,b)=>(egTot[b]||0)-(egTot[a]||0));
   let h='<thead><tr><th class="pub">Editorial group / publisher</th><th style="text-align:left">Channel</th><th style="text-align:left">Metric</th>';
-  LABELS.forEach(d=>h+='<th>'+d.slice(5)+'</th>');
+  IDXS.forEach(i=>h+='<th>'+LABELS[i].slice(5)+'</th>');
   h+='</tr></thead><tbody>';
   order.forEach(k=>{{
     const isOpen=expanded.pivot.has(k);
@@ -743,12 +782,19 @@ function funnelAgg(){{
       addTo(store[key],r);
     }}
   }});
+  filtReq().forEach(([di,ci,g,st,pn,v])=>{{
+    const kEg=(g||'(none)')+'\u0001'+ci;
+    for(const [store,key] of [[eg,kEg],[pub,kEg+'\u0000'+pn]]){{
+      if(!store[key]) store[key]=zeroAcc();
+      store[key].req+=v;
+    }}
+  }});
   return {{eg,pub}};
 }}
 let funnelCache=null;
 function funnelKeys(){{ return Object.keys(funnelCache.eg); }}
 function funnelCells(a){{
-  return '<td>'+fmtInt(a.bids)+'</td><td>'+fmtInt(a.wins)+'</td><td>'+fmtInt(a.hw)+'</td><td>'+fmtInt(a.is)+'</td><td>'+fmtInt(a.ip)+'</td>'
+  return '<td>'+(a.req?fmtInt(a.req):'—')+'</td><td>'+fmtInt(a.wins)+'</td><td>'+fmtInt(a.hw)+'</td><td>'+fmtInt(a.is)+'</td><td>'+fmtInt(a.ip)+'</td>'
     +'<td>'+fmtEUR(a.g)+'</td><td>'+fmtEUR(a.pr)+'</td><td>'+fmtEUR(a.og)+'</td>'
     +'<td>'+(a.hbW?fmtPct(a.hbHW/a.hbW):'—')+'</td>'
     +'<td>'+(a.tagW?fmtPct(a.tagIS/a.tagW):'—')+'</td>'
@@ -760,7 +806,7 @@ function renderFunnel(){{
   const {{eg,pub}}=funnelCache;
   const order=Object.keys(eg).sort((a,b)=>eg[b].g-eg[a].g);
   let h='<thead><tr><th class="pub">Editorial group / publisher</th><th style="text-align:left">Channel</th>'
-    +'<th>Bids</th><th>Wins</th><th>HB Wins</th><th>Imps Sold</th><th>Imps Paid</th>'
+    +'<th>Requests</th><th>Wins</th><th>HB Wins</th><th>Imps Sold</th><th>Imps Paid</th>'
     +'<th>Gross Rev (EUR)</th><th>Publisher Rev (EUR)</th><th>OMP Gross (EUR)</th>'
     +'<th>Win Rate (HB)</th><th>Imp Rate (Tag)</th><th>RPM per 1,000 bids (EUR)</th><th>CPM (EUR)</th></tr></thead><tbody>';
   order.forEach(k=>{{
@@ -786,8 +832,8 @@ function renderFunnel(){{
 }}
 
 // ---------- wiring ----------
-function renderAll(){{ renderKPIs(); buildCharts(); buildReqChart(); renderPivot(); renderFunnel(); }}
-[selEG,selST,selAU,selPUB].forEach(s=>s.addEventListener('change',renderAll));
+function renderAll(){{ computeRange(); renderKPIs(); buildCharts(); buildReqChart(); renderPivot(); renderFunnel(); }}
+[selEG,selST,selAU,selPUB,selMONTH].forEach(s=>s.addEventListener('change',renderAll));
 renderAll();
 
 function rethemeCharts() {{
