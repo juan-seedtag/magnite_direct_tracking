@@ -409,17 +409,17 @@ tr.sub-row td.pub {{ padding-left:28px; color:var(--text-muted); }}
 </section>
 
 <section>
-<h2>2 · Daily ramp since MagniteDirect launch — vs Rubicon {tooltip(kw['sql_main'])}</h2>
-<div class="chart-box"><div id="rampLegend" class="group-legend"></div><div style="position:relative;height:320px"><canvas id="rampChart"></canvas></div></div>
-<p class="summary-line" id="s2Summary"></p>
-<p class="data-footer">Source: Daily supply funnel — Rubicon &amp; MagniteDirect, publishers with MagniteDirect activity, all products, {kw['md_launch']} – {kw['d2']}, revenue in EUR (log scale). {wr_note} Respects the filters above.</p>
-</section>
-
-<section>
-<h2>3 · Requests sent to MagniteDirect by editorial group {tooltip(kw['sql_requests'])}</h2>
+<h2>2 · Requests sent to MagniteDirect by editorial group {tooltip(kw['sql_requests'])}</h2>
 <div class="chart-box"><div id="reqLegend" class="group-legend"></div><div style="position:relative;height:320px"><canvas id="reqChart"></canvas></div></div>
 <p class="summary-line" id="reqSummary"></p>
 <p class="data-footer">Source: SSP events daily (stg_ssp_events_daily) — MagniteDirect channel, all products, {kw['d1']} – {kw['d2']}. Requests are outbound bid requests Seedtag forwards to the MagniteDirect demand channel (not bid inputs). Log scale — volumes are heavily skewed. Respects the Editorial Group filter only.</p>
+</section>
+
+<section>
+<h2>3 · Daily ramp since MagniteDirect launch — vs Rubicon {tooltip(kw['sql_main'])}</h2>
+<div class="chart-box"><div id="rampLegend" class="group-legend"></div><div style="position:relative;height:320px"><canvas id="rampChart"></canvas></div></div>
+<p class="summary-line" id="s2Summary"></p>
+<p class="data-footer">Source: Daily supply funnel — Rubicon &amp; MagniteDirect, publishers with MagniteDirect activity, all products, {kw['md_launch']} – {kw['d2']}, revenue in EUR (log scale). {wr_note} Respects the filters above.</p>
 </section>
 
 <section>
