@@ -512,6 +512,8 @@ function buildCharts(){{
   const D=dailySeries();
   const gap=(i,v)=>PENDING.has(DATES[i])&&!v?null:(v||null);
   const revData={{labels:LABELS,datasets:[
+    {{type:'line',label:'Rubicon Bids',data:DATES.map((_,i)=>gap(i,D[0][i].bids)),borderColor:COLORS[2],backgroundColor:COLORS[2],yAxisID:'y2',pointRadius:2,tension:0.25}},
+    {{type:'line',label:'MagniteDirect Bids',data:DATES.map((_,i)=>gap(i,D[1][i].bids)),borderColor:COLORS[6],backgroundColor:COLORS[6],yAxisID:'y2',pointRadius:2,tension:0.25}},
     {{label:'Rubicon Gross',data:DATES.map((_,i)=>gap(i,D[0][i].g)),backgroundColor:COLORS[0]}},
     {{label:'Rubicon Publisher Rev',data:DATES.map((_,i)=>gap(i,D[0][i].pr)),backgroundColor:COLORS[3]}},
     {{label:'MagniteDirect Gross',data:DATES.map((_,i)=>gap(i,D[1][i].g)),backgroundColor:COLORS[1]}},
@@ -537,7 +539,8 @@ function buildCharts(){{
   if(!revChart){{
     let o=baseOpts(t);
     o.scales={{x:{{ticks:{{color:t.muted}},grid:{{color:t.border}}}},
-      y:{{type:'logarithmic',ticks:{{color:t.muted,callback:v=>'€'+Number(v).toLocaleString()}},grid:{{color:t.border}},title:{{display:true,text:'EUR (log scale)',color:t.muted}}}}}};
+      y:{{type:'logarithmic',ticks:{{color:t.muted,callback:v=>'€'+Number(v).toLocaleString()}},grid:{{color:t.border}},title:{{display:true,text:'EUR (log scale)',color:t.muted}}}},
+      y2:{{type:'logarithmic',position:'right',ticks:{{color:t.muted,callback:v=>Number(v).toLocaleString()}},grid:{{drawOnChartArea:false}},title:{{display:true,text:'Bids (log scale)',color:t.muted}}}}}};
     revChart=new Chart(document.getElementById('revChart'),{{type:'bar',data:revData,options:o}}); charts.push(revChart);
     o=baseOpts(t);
     o.scales={{x:{{ticks:{{color:t.muted}},grid:{{color:t.border}}}},
