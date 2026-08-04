@@ -634,15 +634,20 @@ function buildReqChart(){{
   const datasets=order.map((g,i)=>({{label:g,data:groups[g],
     borderColor:COLORS[i%COLORS.length],backgroundColor:COLORS[i%COLORS.length],
     pointRadius:2,tension:0.25}}));
+  // pad the log axis so the lines sit near the middle rather than hugging the top
+  const vals=datasets.flatMap(d=>d.data).filter(v=>v>0);
+  const yMax=vals.length?Math.pow(10,Math.ceil(Math.log10(Math.max(...vals)))+2):undefined;
+  const yMin=vals.length?Math.pow(10,Math.floor(Math.log10(Math.min(...vals)))-1):undefined;
   if(!reqChart){{
     const o=baseOpts(t);
     o.plugins.legend.display=false;
     o.plugins.tooltip.callbacks={{label:c=>c.dataset.label+': '+fmtM(c.parsed.y)}};
     o.scales={{x:{{ticks:{{color:t.muted}},grid:{{color:t.border}}}},
-      y:{{type:'logarithmic',ticks:{{color:t.muted,callback:v=>fmtM(Number(v))}},grid:{{color:t.border}},title:{{display:true,text:'Requests (log scale)',color:t.muted}}}}}};
+      y:{{type:'logarithmic',min:yMin,max:yMax,ticks:{{color:t.muted,callback:v=>fmtM(Number(v))}},grid:{{color:t.border}},title:{{display:true,text:'Requests (log scale)',color:t.muted}}}}}};
     reqChart=new Chart(document.getElementById('reqChart'),{{type:'line',data:{{labels:LABELS,datasets}},options:o}}); charts.push(reqChart);
   }} else {{
     reqChart.data={{labels:LABELS,datasets}};
+    reqChart.options.scales.y.min=yMin; reqChart.options.scales.y.max=yMax;
     reqChart.update('none');
   }}
   buildGroupLegend(reqChart,'reqLegend',[['Editorial Group',order.map((g,i)=>[i,g])]]);
