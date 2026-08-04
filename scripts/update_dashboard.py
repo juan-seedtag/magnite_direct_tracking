@@ -300,6 +300,12 @@ section {{ padding:8px 32px; }}
 .caveats ul {{ margin:6px 0 0 18px; padding:0; }}
 .caveats li {{ margin:3px 0; }}
 .chart-box {{ background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:16px; margin:12px 0; }}
+.group-legend {{ display:flex; flex-wrap:wrap; gap:12px; justify-content:center; margin-bottom:12px; }}
+.legend-group {{ border:1px solid var(--border); border-radius:10px; padding:6px 12px; display:flex; align-items:center; gap:12px; background:var(--surface-2); }}
+.legend-group .g-title {{ font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:0.04em; color:var(--text-muted); }}
+.legend-item {{ display:inline-flex; align-items:center; gap:5px; font-size:12px; color:var(--text); cursor:pointer; user-select:none; }}
+.legend-item .swatch {{ width:12px; height:12px; border-radius:3px; display:inline-block; }}
+.legend-item.off {{ opacity:0.45; text-decoration:line-through; }}
 .summary-line {{ font-size:13px; color:var(--text-muted); margin:8px 0 2px; }}
 .data-footer {{ font-style:italic; font-size:12px; color:var(--text-subtle); margin:2px 0 20px; }}
 .tbl-actions {{ display:flex; gap:8px; margin:8px 0; }}
@@ -380,7 +386,7 @@ tr.sub-row td.pub {{ padding-left:28px; color:var(--text-muted); }}
 
 <section>
 <h2>1 · Evolution by channel {tooltip(kw['sql_main'])}</h2>
-<div class="chart-box"><div style="position:relative;height:320px"><canvas id="revChart"></canvas></div></div>
+<div class="chart-box"><div id="revLegend" class="group-legend"></div><div style="position:relative;height:320px"><canvas id="revChart"></canvas></div></div>
 <p class="summary-line" id="s1Summary"></p>
 <div class="chart-box"><div style="position:relative;height:280px"><canvas id="ratioChart"></canvas></div></div>
 <p class="summary-line">Win Rate (HB) and Imp Rate (Tag) per channel (left axis) and CPM (dashed, right axis). {wr_note} Recent CPM points are provisional due to the impression-reporting lag.</p>
@@ -538,10 +544,12 @@ function buildCharts(){{
 
   if(!revChart){{
     let o=baseOpts(t);
+    o.plugins.legend.display=false;  // grouped HTML legend below instead
     o.scales={{x:{{ticks:{{color:t.muted}},grid:{{color:t.border}}}},
       y:{{type:'logarithmic',ticks:{{color:t.muted,callback:v=>'€'+Number(v).toLocaleString()}},grid:{{color:t.border}},title:{{display:true,text:'EUR (log scale)',color:t.muted}}}},
       y2:{{type:'logarithmic',position:'right',ticks:{{color:t.muted,callback:v=>Number(v).toLocaleString()}},grid:{{drawOnChartArea:false}},title:{{display:true,text:'Bids (log scale)',color:t.muted}}}}}};
     revChart=new Chart(document.getElementById('revChart'),{{type:'bar',data:revData,options:o}}); charts.push(revChart);
+    buildRevLegend();
     o=baseOpts(t);
     o.scales={{x:{{ticks:{{color:t.muted}},grid:{{color:t.border}}}},
       y:{{position:'left',ticks:{{color:t.muted,callback:v=>(v*100).toFixed(0)+'%'}},grid:{{color:t.border}},title:{{display:true,text:'Rate',color:t.muted}}}},
@@ -565,6 +573,28 @@ function buildCharts(){{
   document.getElementById('s2Summary').textContent=
     'MagniteDirect Gross on '+DATES[li]+': '+fmtEUR(D[1][li].g||null)+(wr!=null?' with a '+(wr*100).toFixed(1)+'% Win Rate (HB)':'')
     +(wrR!=null?' (Rubicon: '+(wrR*100).toFixed(1)+'%)':'')+'.'+pendNote;
+}}
+
+// grouped legend for the evolution chart: metric boxes with channel chips.
+// dataset order: 0 Rub Bids, 1 MD Bids, 2 Rub Gross, 3 Rub PubRev, 4 MD Gross, 5 MD PubRev
+function buildRevLegend(){{
+  const GROUPS=[['Bids',[[0,'Rubicon'],[1,'MagniteDirect']]],
+                ['Gross',[[2,'Rubicon'],[4,'MagniteDirect']]],
+                ['Publisher Rev',[[3,'Rubicon'],[5,'MagniteDirect']]]];
+  const el=document.getElementById('revLegend');
+  el.innerHTML=GROUPS.map(([title,items])=>
+    '<div class="legend-group"><span class="g-title">'+title+'</span>'+
+    items.map(([di,ch])=>{{
+      const ds=revChart.data.datasets[di];
+      const color=ds.borderColor||ds.backgroundColor;
+      return '<span class="legend-item" data-di="'+di+'"><span class="swatch" style="background:'+color+'"></span>'+ch+'</span>';
+    }}).join('')+'</div>').join('');
+  el.querySelectorAll('.legend-item').forEach(it=>it.addEventListener('click',()=>{{
+    const di=+it.dataset.di;
+    revChart.setDatasetVisibility(di,!revChart.isDatasetVisible(di));
+    it.classList.toggle('off',!revChart.isDatasetVisible(di));
+    revChart.update('none');
+  }}));
 }}
 
 // ---------- expand/collapse ----------
