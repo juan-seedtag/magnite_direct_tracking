@@ -388,14 +388,14 @@ tr.sub-row td.pub {{ padding-left:28px; color:var(--text-muted); }}
 <h2>1 · Evolution by channel {tooltip(kw['sql_main'])}</h2>
 <div class="chart-box"><div id="revLegend" class="group-legend"></div><div style="position:relative;height:320px"><canvas id="revChart"></canvas></div></div>
 <p class="summary-line" id="s1Summary"></p>
-<div class="chart-box"><div style="position:relative;height:280px"><canvas id="ratioChart"></canvas></div></div>
+<div class="chart-box"><div id="ratioLegend" class="group-legend"></div><div style="position:relative;height:280px"><canvas id="ratioChart"></canvas></div></div>
 <p class="summary-line">Win Rate (HB) and Imp Rate (Tag) per channel (left axis) and CPM (dashed, right axis). {wr_note} Recent CPM points are provisional due to the impression-reporting lag.</p>
 <p class="data-footer">Source: Daily supply funnel — Magnite channels only, publishers with MagniteDirect activity, all products, {kw['d1']} – {kw['d2']}, revenue in EUR. Respects the filters above. Dates marked * are pending warehouse restore.</p>
 </section>
 
 <section>
 <h2>2 · Daily ramp since MagniteDirect launch — vs Rubicon {tooltip(kw['sql_main'])}</h2>
-<div class="chart-box"><div style="position:relative;height:320px"><canvas id="rampChart"></canvas></div></div>
+<div class="chart-box"><div id="rampLegend" class="group-legend"></div><div style="position:relative;height:320px"><canvas id="rampChart"></canvas></div></div>
 <p class="summary-line" id="s2Summary"></p>
 <p class="data-footer">Source: Daily supply funnel — Rubicon &amp; MagniteDirect, publishers with MagniteDirect activity, all products, {kw['md_launch']} – {kw['d2']}, revenue in EUR (log scale). {wr_note} Respects the filters above.</p>
 </section>
@@ -549,17 +549,21 @@ function buildCharts(){{
       y:{{type:'logarithmic',ticks:{{color:t.muted,callback:v=>'€'+Number(v).toLocaleString()}},grid:{{color:t.border}},title:{{display:true,text:'EUR (log scale)',color:t.muted}}}},
       y2:{{type:'logarithmic',position:'right',ticks:{{color:t.muted,callback:v=>Number(v).toLocaleString()}},grid:{{drawOnChartArea:false}},title:{{display:true,text:'Bids (log scale)',color:t.muted}}}}}};
     revChart=new Chart(document.getElementById('revChart'),{{type:'bar',data:revData,options:o}}); charts.push(revChart);
-    buildRevLegend();
+    buildGroupLegend(revChart,'revLegend',[['Bids',[[0,'Rubicon'],[1,'MagniteDirect']]],['Gross',[[2,'Rubicon'],[4,'MagniteDirect']]],['Publisher Rev',[[3,'Rubicon'],[5,'MagniteDirect']]]]);
     o=baseOpts(t);
     o.scales={{x:{{ticks:{{color:t.muted}},grid:{{color:t.border}}}},
       y:{{position:'left',ticks:{{color:t.muted,callback:v=>(v*100).toFixed(0)+'%'}},grid:{{color:t.border}},title:{{display:true,text:'Rate',color:t.muted}}}},
       y2:{{position:'right',ticks:{{color:t.muted,callback:v=>'€'+v.toFixed(2)}},grid:{{drawOnChartArea:false}},title:{{display:true,text:'CPM (EUR)',color:t.muted}}}}}};
+    o.plugins.legend.display=false;
     ratioChart=new Chart(document.getElementById('ratioChart'),{{type:'line',data:ratioData,options:o}}); charts.push(ratioChart);
+    buildGroupLegend(ratioChart,'ratioLegend',[['Win Rate (HB)',[[0,'Rubicon'],[1,'MagniteDirect']]],['Imp Rate (Tag)',[[2,'Rubicon'],[3,'MagniteDirect']]],['CPM',[[4,'Rubicon'],[5,'MagniteDirect']]]]);
     o=baseOpts(t);
     o.scales={{x:{{ticks:{{color:t.muted}},grid:{{color:t.border}}}},
       y:{{type:'logarithmic',position:'left',ticks:{{color:t.muted,callback:v=>'€'+Number(v).toLocaleString()}},grid:{{color:t.border}},title:{{display:true,text:'Gross Revenue (EUR, log scale)',color:t.muted}}}},
       y2:{{position:'right',ticks:{{color:t.muted,callback:v=>(v*100).toFixed(0)+'%'}},grid:{{drawOnChartArea:false}},title:{{display:true,text:'Rate',color:t.muted}}}}}};
+    o.plugins.legend.display=false;
     rampChart=new Chart(document.getElementById('rampChart'),{{data:rampData,options:o}}); charts.push(rampChart);
+    buildGroupLegend(rampChart,'rampLegend',[['Gross',[[1,'Rubicon'],[0,'MagniteDirect']]],['Win Rate (HB)',[[3,'Rubicon'],[2,'MagniteDirect']]],['Imp Rate (Tag)',[[5,'Rubicon'],[4,'MagniteDirect']]]]);
   }} else {{
     revChart.data=revData; ratioChart.data=ratioData; rampChart.data=rampData;
     charts.forEach(c=>c.update('none'));
@@ -575,25 +579,21 @@ function buildCharts(){{
     +(wrR!=null?' (Rubicon: '+(wrR*100).toFixed(1)+'%)':'')+'.'+pendNote;
 }}
 
-// grouped legend for the evolution chart: metric boxes with channel chips.
-// dataset order: 0 Rub Bids, 1 MD Bids, 2 Rub Gross, 3 Rub PubRev, 4 MD Gross, 5 MD PubRev
-function buildRevLegend(){{
-  const GROUPS=[['Bids',[[0,'Rubicon'],[1,'MagniteDirect']]],
-                ['Gross',[[2,'Rubicon'],[4,'MagniteDirect']]],
-                ['Publisher Rev',[[3,'Rubicon'],[5,'MagniteDirect']]]];
-  const el=document.getElementById('revLegend');
-  el.innerHTML=GROUPS.map(([title,items])=>
+// grouped HTML legends: one box per metric, channel chips inside.
+function buildGroupLegend(chart,containerId,groups){{
+  const el=document.getElementById(containerId);
+  el.innerHTML=groups.map(([title,items])=>
     '<div class="legend-group"><span class="g-title">'+title+'</span>'+
     items.map(([di,ch])=>{{
-      const ds=revChart.data.datasets[di];
+      const ds=chart.data.datasets[di];
       const color=ds.borderColor||ds.backgroundColor;
       return '<span class="legend-item" data-di="'+di+'"><span class="swatch" style="background:'+color+'"></span>'+ch+'</span>';
     }}).join('')+'</div>').join('');
   el.querySelectorAll('.legend-item').forEach(it=>it.addEventListener('click',()=>{{
     const di=+it.dataset.di;
-    revChart.setDatasetVisibility(di,!revChart.isDatasetVisible(di));
-    it.classList.toggle('off',!revChart.isDatasetVisible(di));
-    revChart.update('none');
+    chart.setDatasetVisibility(di,!chart.isDatasetVisible(di));
+    it.classList.toggle('off',!chart.isDatasetVisible(di));
+    chart.update('none');
   }}));
 }}
 
