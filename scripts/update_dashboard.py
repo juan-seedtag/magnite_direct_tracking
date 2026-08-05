@@ -430,11 +430,11 @@ tr.sub-row td.pub {{ padding-left:28px; color:var(--text-muted); }}
 <section>
 <h2>1 · Evolution by channel {tooltip(kw['sql_main'])}</h2>
 <div class="chart-box"><div id="revLegend" class="group-legend"></div><div style="position:relative;height:320px"><canvas id="revChart"></canvas></div>
-<p class="summary-line"><strong>⚠ Dual axes:</strong> Rubicon reads on the <strong>left</strong> axis and MagniteDirect on the <strong>right</strong> axis, each on its own scale — the two channels differ by roughly 100×, so bar heights are only comparable within a channel, never across channels.</p></div>
+<p class="summary-line"><strong>ℹ Stacked bars:</strong> each day shows two bars — Gross Revenue and Publisher Revenue — stacked by channel (Rubicon + MagniteDirect), so the total height is the combined Magnite revenue and the split shows each channel's share. MagniteDirect is ~1% of Rubicon, so its segment is thin — filter or hover to read its exact values.</p></div>
 <p class="summary-line" id="s1Summary"></p>
 <div class="chart-box"><div id="ratioLegend" class="group-legend"></div><div style="position:relative;height:280px"><canvas id="ratioChart"></canvas></div></div>
 <p class="summary-line">Win Rate (HB) and Imp Rate (Tag) per channel (left axis) and CPM (dashed, right axis). {wr_note} Recent CPM points are provisional due to the impression-reporting lag.</p>
-<p class="data-footer">Source: Daily supply funnel — Magnite channels only, publishers with MagniteDirect activity, all products, {kw['d1']} – {kw['d2']}, revenue in EUR. Dual linear axes (Rubicon left, MagniteDirect right). Respects the filters above. Dates marked * are pending warehouse restore.</p>
+<p class="data-footer">Source: Daily supply funnel — Magnite channels only, publishers with MagniteDirect activity, all products, {kw['d1']} – {kw['d2']}, revenue in EUR. Stacked bars by channel on a single linear axis. Respects the filters above. Dates marked * are pending warehouse restore.</p>
 </section>
 
 <section>
@@ -627,10 +627,10 @@ function buildCharts(){{
   const gap=(i,v)=>PENDING.has(DATES[i])&&!v?null:(v||null);
   const VL=IDXS.map(i=>LABELS[i]);
   const revData={{labels:VL,datasets:[
-    {{label:'Rubicon Gross',data:IDXS.map(i=>gap(i,D[0][i].g)),backgroundColor:COLORS[0],yAxisID:'y'}},
-    {{label:'Rubicon Publisher Rev',data:IDXS.map(i=>gap(i,D[0][i].pr)),backgroundColor:COLORS[3],yAxisID:'y'}},
-    {{label:'MagniteDirect Gross',data:IDXS.map(i=>gap(i,D[1][i].g)),backgroundColor:COLORS[1],yAxisID:'y2'}},
-    {{label:'MagniteDirect Publisher Rev',data:IDXS.map(i=>gap(i,D[1][i].pr)),backgroundColor:COLORS[5],yAxisID:'y2'}}
+    {{label:'Rubicon Gross',data:IDXS.map(i=>gap(i,D[0][i].g)),backgroundColor:COLORS[0],stack:'gross'}},
+    {{label:'MagniteDirect Gross',data:IDXS.map(i=>gap(i,D[1][i].g)),backgroundColor:COLORS[1],stack:'gross'}},
+    {{label:'Rubicon Publisher Rev',data:IDXS.map(i=>gap(i,D[0][i].pr)),backgroundColor:COLORS[3],stack:'pub'}},
+    {{label:'MagniteDirect Publisher Rev',data:IDXS.map(i=>gap(i,D[1][i].pr)),backgroundColor:COLORS[5],stack:'pub'}}
   ]}};
   const ratioData={{labels:VL,datasets:[
     {{label:'Rubicon Win Rate (HB)',data:IDXS.map(i=>div(D[0][i].hbHW,D[0][i].hbW)),borderColor:COLORS[0],backgroundColor:COLORS[0],yAxisID:'y',pointRadius:2,tension:0.25}},
@@ -644,11 +644,10 @@ function buildCharts(){{
   if(!revChart){{
     let o=baseOpts(t);
     o.plugins.legend.display=false;  // grouped HTML legend below instead
-    o.scales={{x:{{ticks:{{color:t.muted}},grid:{{color:t.border}}}},
-      y:{{position:'left',beginAtZero:true,ticks:{{color:t.muted,callback:v=>'€'+Number(v).toLocaleString()}},grid:{{color:t.border}},title:{{display:true,text:'Rubicon (EUR)',color:t.muted}}}},
-      y2:{{position:'right',beginAtZero:true,ticks:{{color:t.muted,callback:v=>'€'+Number(v).toLocaleString()}},grid:{{drawOnChartArea:false}},title:{{display:true,text:'MagniteDirect (EUR)',color:t.muted}}}}}};
+    o.scales={{x:{{stacked:true,ticks:{{color:t.muted}},grid:{{color:t.border}}}},
+      y:{{stacked:true,beginAtZero:true,ticks:{{color:t.muted,callback:v=>'€'+Number(v).toLocaleString()}},grid:{{color:t.border}},title:{{display:true,text:'EUR',color:t.muted}}}}}};
     revChart=new Chart(document.getElementById('revChart'),{{type:'bar',data:revData,options:o}}); charts.push(revChart);
-    buildGroupLegend(revChart,'revLegend',[['Gross',[[0,'Rubicon'],[2,'MagniteDirect']]],['Publisher Rev',[[1,'Rubicon'],[3,'MagniteDirect']]]]);
+    buildGroupLegend(revChart,'revLegend',[['Gross',[[0,'Rubicon'],[1,'MagniteDirect']]],['Publisher Rev',[[2,'Rubicon'],[3,'MagniteDirect']]]]);
     o=baseOpts(t);
     o.scales={{x:{{ticks:{{color:t.muted}},grid:{{color:t.border}}}},
       y:{{position:'left',ticks:{{color:t.muted,callback:v=>(v*100).toFixed(0)+'%'}},grid:{{color:t.border}},title:{{display:true,text:'Rate',color:t.muted}}}},
