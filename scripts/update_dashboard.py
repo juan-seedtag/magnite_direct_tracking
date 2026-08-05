@@ -309,8 +309,24 @@ html[data-theme="dark"] #theme-toggle .icon-moon {{ display:inline; }}
   box-shadow:0 4px 14px rgba(0,0,0,0.08); padding-bottom:10px; }}
 .filter-bar {{ display:flex; flex-wrap:wrap; gap:20px; align-items:center; padding:16px 32px 0; }}
 .filter-bar label {{ font-size:12px; text-transform:uppercase; letter-spacing:0.04em; color:var(--text-subtle); margin-right:8px; }}
-.filter-bar select {{ background:var(--surface); color:var(--text); border:1px solid var(--border);
-  border-radius:8px; padding:7px 10px; font-family:'Instrument Sans',sans-serif; font-size:13px; min-width:190px; }}
+.msel {{ position:relative; display:inline-block; }}
+.msel-btn {{ background:var(--surface); color:var(--text); border:1px solid var(--border);
+  border-radius:8px; padding:7px 10px; font-family:'Instrument Sans',sans-serif; font-size:13px;
+  min-width:190px; text-align:left; cursor:pointer; }}
+.msel-btn::after {{ content:'\25BE'; float:right; color:var(--text-subtle); }}
+.msel-pop {{ display:none; position:absolute; top:calc(100% + 4px); left:0; z-index:6000;
+  background:var(--surface); border:1px solid var(--border); border-radius:10px;
+  box-shadow:0 8px 24px rgba(0,0,0,0.18); min-width:240px; max-height:320px; overflow:hidden;
+  display:none; flex-direction:column; }}
+.msel.open .msel-pop {{ display:flex; }}
+.msel-search {{ margin:8px; padding:6px 8px; border:1px solid var(--border); border-radius:6px;
+  background:var(--surface-2); color:var(--text); font-family:'Instrument Sans',sans-serif; font-size:12px; }}
+.msel-actions {{ display:flex; gap:8px; padding:0 8px 6px; }}
+.msel-actions a {{ font-size:11px; color:var(--accent); cursor:pointer; }}
+.msel-list {{ overflow-y:auto; padding:0 8px 8px; }}
+.msel-list label {{ display:flex; align-items:center; gap:6px; font-size:12px; padding:3px 2px;
+  color:var(--text); text-transform:none; letter-spacing:0; cursor:pointer; margin:0; }}
+.msel-list label.dim {{ display:none; }}
 .kpi-block {{ padding:16px 32px 0; }}
 .kpi-channel {{ font-size:13px; font-weight:600; text-transform:uppercase; letter-spacing:0.05em; margin:8px 0 8px; color:var(--text-muted); }}
 .kpi-channel.md {{ color:var(--accent); }}
@@ -384,12 +400,12 @@ tr.sub-row td.pub {{ padding-left:28px; color:var(--text-muted); }}
 </header>
 
 <div class="sticky-top">
-<div class="filter-bar">
-  <div><label for="f-eg">Editorial Group</label><select id="f-eg"><option value="">All editorial groups</option></select></div>
-  <div><label for="f-pub">Publisher</label><select id="f-pub"><option value="">All publishers</option></select></div>
-  <div><label for="f-st">Source Type</label><select id="f-st"><option value="">All source types</option></select></div>
-  <div><label for="f-au">Ad Unit Type</label><select id="f-au"><option value="">All ad unit types</option></select></div>
-  <div><label for="f-month">Month</label><select id="f-month"><option value="">All months</option></select></div>
+<div class="filter-bar" id="filterBar">
+  <div><label>Editorial Group</label><div class="msel" id="f-eg"></div></div>
+  <div><label>Publisher</label><div class="msel" id="f-pub"></div></div>
+  <div><label>Source Type</label><div class="msel" id="f-st"></div></div>
+  <div><label>Ad Unit Type</label><div class="msel" id="f-au"></div></div>
+  <div><label>Month</label><div class="msel" id="f-month"></div></div>
 </div>
 </div>
 
@@ -483,37 +499,82 @@ const fmtInt=v=>v==null?'—':v.toLocaleString('en-US');
 const div=(n,d)=>d?n/d:null;
 const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
 
-// ---------- filters ----------
-const selEG=document.getElementById('f-eg'), selST=document.getElementById('f-st'),
-      selAU=document.getElementById('f-au'), selPUB=document.getElementById('f-pub'),
-      selMONTH=document.getElementById('f-month');
-{{
-  const months=[...new Set(DATES.map(d=>d.slice(0,7)))];
-  months.forEach(m=>selMONTH.insertAdjacentHTML('beforeend','<option value="'+m+'">'+m+'</option>'));
+// ---------- filters: cascading multi-selects ----------
+// SEL sets: empty set = "all". Options for each filter are recomputed from the
+// rows that pass every OTHER filter (cascading), preserving still-valid picks.
+const SEL={{eg:new Set(),pub:new Set(),st:new Set(),au:new Set(),month:new Set()}};
+const FDEF=[
+  ['f-eg','eg','editorial groups',r=>r[2]],
+  ['f-pub','pub','publishers',r=>r[5]],
+  ['f-st','st','source types',r=>r[3]],
+  ['f-au','au','ad unit types',r=>r[4]],
+  ['f-month','month','months',r=>DATES[r[0]].slice(0,7)],
+];
+function rowPass(r,skip){{
+  return (skip==='eg'||!SEL.eg.size||SEL.eg.has(r[2]))
+    &&(skip==='pub'||!SEL.pub.size||SEL.pub.has(r[5]))
+    &&(skip==='st'||!SEL.st.size||SEL.st.has(r[3]))
+    &&(skip==='au'||!SEL.au.size||SEL.au.has(r[4]))
+    &&(skip==='month'||!SEL.month.size||SEL.month.has(DATES[r[0]].slice(0,7)));
 }}
-let LO=0, HI=N_DAYS-1, IDXS=[];
-function computeRange(){{
-  const m=selMONTH.value;
-  LO=0; HI=N_DAYS-1;
-  if(m){{ const idx=DATES.map((d,i)=>[d,i]).filter(([d])=>d.startsWith(m)).map(([,i])=>i);
-         LO=idx[0]; HI=idx[idx.length-1]; }}
-  IDXS=[]; for(let i=LO;i<=HI;i++) IDXS.push(i);
-}}
-{{
-  const fill=(sel,idx)=>{{
-    [...new Set(B.map(r=>r[idx]).filter(Boolean))].sort((a,b)=>a.localeCompare(b))
-      .forEach(v=>sel.insertAdjacentHTML('beforeend','<option value="'+esc(v)+'">'+esc(v)+'</option>'));
-  }};
-  fill(selEG,2); fill(selST,3); fill(selAU,4); fill(selPUB,5);
-}}
-function filt(rows){{
-  const eg=selEG.value, st=selST.value, au=selAU.value, pub=selPUB.value;
-  return rows.filter(r=>r[0]>=LO&&r[0]<=HI&&(!eg||r[2]===eg)&&(!st||r[3]===st)&&(!au||r[4]===au)&&(!pub||r[5]===pub));
-}}
-// requests rows have no ad-unit dimension: honor every other filter
+function filt(rows){{ return rows.filter(r=>rowPass(r,null)); }}
+// requests rows [di,ch,eg,st,pub,v] — no ad-unit dimension: honor every other filter
 function filtReq(){{
-  const eg=selEG.value, st=selST.value, pub=selPUB.value;
-  return REQ.filter(r=>r[0]>=LO&&r[0]<=HI&&(!eg||r[2]===eg)&&(!st||r[3]===st)&&(!pub||r[4]===pub));
+  return REQ.filter(r=>(!SEL.month.size||SEL.month.has(DATES[r[0]].slice(0,7)))
+    &&(!SEL.eg.size||SEL.eg.has(r[2]))
+    &&(!SEL.st.size||SEL.st.has(r[3]))
+    &&(!SEL.pub.size||SEL.pub.has(r[4])));
+}}
+let IDXS=[];
+function computeRange(){{
+  IDXS=[]; for(let i=0;i<N_DAYS;i++) if(!SEL.month.size||SEL.month.has(DATES[i].slice(0,7))) IDXS.push(i);
+}}
+function mselSummary(key,label){{
+  const n=SEL[key].size;
+  return n===0?'All '+label:(n===1?[...SEL[key]][0]:n+' selected');
+}}
+function buildMsel(id,key,label,getter){{
+  const root=document.getElementById(id);
+  root.innerHTML='<button type="button" class="msel-btn"></button>'
+    +'<div class="msel-pop"><input class="msel-search" placeholder="Search..." type="text">'
+    +'<div class="msel-actions"><a data-act="all">Select all</a><a data-act="none">Clear</a></div>'
+    +'<div class="msel-list"></div></div>';
+  root.querySelector('.msel-btn').addEventListener('click',e=>{{
+    document.querySelectorAll('.msel.open').forEach(m=>{{ if(m!==root) m.classList.remove('open'); }});
+    root.classList.toggle('open'); e.stopPropagation();
+  }});
+  root.querySelector('.msel-pop').addEventListener('click',e=>e.stopPropagation());
+  root.querySelector('.msel-search').addEventListener('input',e=>{{
+    const q=e.target.value.toLowerCase();
+    root.querySelectorAll('.msel-list label').forEach(l=>l.classList.toggle('dim',!l.textContent.toLowerCase().includes(q)));
+  }});
+  root.querySelector('.msel-actions').addEventListener('click',e=>{{
+    const act=e.target.dataset.act; if(!act) return;
+    if(act==='none') SEL[key].clear();
+    else root.querySelectorAll('.msel-list input').forEach(cb=>SEL[key].add(cb.value));
+    renderAll();
+  }});
+  root.querySelector('.msel-list').addEventListener('change',e=>{{
+    const v=e.target.value;
+    e.target.checked?SEL[key].add(v):SEL[key].delete(v);
+    renderAll();
+  }});
+}}
+FDEF.forEach(([id,key,label,getter])=>buildMsel(id,key,label,getter));
+document.addEventListener('click',()=>document.querySelectorAll('.msel.open').forEach(m=>m.classList.remove('open')));
+function refreshFilters(){{
+  FDEF.forEach(([id,key,label,getter])=>{{
+    const root=document.getElementById(id);
+    const avail=[...new Set(B.filter(r=>rowPass(r,key)).map(getter).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
+    // prune selections that are no longer offered
+    [...SEL[key]].forEach(v=>{{ if(!avail.includes(v)) SEL[key].delete(v); }});
+    const list=root.querySelector('.msel-list');
+    list.innerHTML=avail.map(v=>'<label><input type="checkbox" value="'+esc(v)+'"'
+      +(SEL[key].has(v)?' checked':'')+'>'+esc(v)+'</label>').join('');
+    const q=root.querySelector('.msel-search').value.toLowerCase();
+    if(q) list.querySelectorAll('label').forEach(l=>l.classList.toggle('dim',!l.textContent.toLowerCase().includes(q)));
+    root.querySelector('.msel-btn').textContent=mselSummary(key,label);
+  }});
 }}
 
 // zero-filled accumulator; family-split fields feed the two rate metrics:
@@ -624,7 +685,7 @@ function buildCharts(){{
     charts.forEach(c=>c.update('none'));
   }}
 
-  const li=HI;
+  const li=IDXS[IDXS.length-1];
   const pendNote=PENDING.size?' Dates marked * are pending warehouse restore.':'';
   document.getElementById('s1Summary').textContent=
     'Latest closed day ('+DATES[li]+'): Rubicon '+fmtEUR(D[0][li].g||null)+' Gross vs MagniteDirect '+fmtEUR(D[1][li].g||null)+' (MagniteDirect publishers only).'+pendNote;
@@ -832,8 +893,7 @@ function renderFunnel(){{
 }}
 
 // ---------- wiring ----------
-function renderAll(){{ computeRange(); renderKPIs(); buildCharts(); buildReqChart(); renderPivot(); renderFunnel(); }}
-[selEG,selST,selAU,selPUB,selMONTH].forEach(s=>s.addEventListener('change',renderAll));
+function renderAll(){{ computeRange(); refreshFilters(); renderKPIs(); buildCharts(); buildReqChart(); renderPivot(); renderFunnel(); }}
 renderAll();
 
 function rethemeCharts() {{
