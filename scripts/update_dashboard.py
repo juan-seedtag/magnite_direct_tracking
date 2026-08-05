@@ -391,6 +391,7 @@ tr.sub-row td.pub {{ padding-left:28px; color:var(--text-muted); }}
   <div><label for="f-au">Ad Unit Type</label><select id="f-au"><option value="">All ad unit types</option></select></div>
   <div><label for="f-month">Month</label><select id="f-month"><option value="">All months</option></select></div>
 </div>
+</div>
 
 <div class="kpi-block">
   <div class="kpi-channel md">MagniteDirect</div>
@@ -398,7 +399,6 @@ tr.sub-row td.pub {{ padding-left:28px; color:var(--text-muted); }}
   <div class="kpi-channel">Rubicon</div>
   <div class="kpi-row" id="kpi-rub"></div>
   <p class="kpi-note">{wr_note} RPM = OMP Gross × 1000 / SSP bids (per 1,000 bids). CPM = Publisher Revenue × 1000 / publisher-reported impressions. Window: {kw['d1']} – {kw['d2']} (MagniteDirect since {kw['md_launch']}), scoped to MagniteDirect publishers and filtered by the selections above.</p>
-</div>
 </div>
 
 <div class="caveats">
