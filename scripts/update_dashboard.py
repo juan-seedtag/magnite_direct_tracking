@@ -258,6 +258,8 @@ def render_html(**kw):
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
 <style>
 :root {{
   --bg:#EBE6E4; --surface:#FFFFFF; --surface-2:#F7F4F2; --border:#D4D0CE;
@@ -439,9 +441,10 @@ tr.sub-row td.pub {{ padding-left:28px; color:var(--text-muted); }}
 
 <section>
 <h2>2 · Requests sent to MagniteDirect by editorial group {tooltip(kw['sql_requests'])}</h2>
-<div class="chart-box"><div id="reqLegend" class="group-legend"></div><div style="position:relative;height:320px"><canvas id="reqChart"></canvas></div></div>
+<div class="chart-box"><div id="reqLegend" class="group-legend"></div><div style="position:relative;height:320px"><canvas id="reqChart"></canvas></div>
+<p class="summary-line">Scroll on the chart to zoom the request axis in and out, drag to pan up and down (useful to reach the small editorial groups), and <a href="#" onclick="reqChart.resetZoom();return false" style="color:var(--accent)">reset the view</a>.</p></div>
 <p class="summary-line" id="reqSummary"></p>
-<p class="data-footer">Source: SSP events daily (stg_ssp_events_daily) — MagniteDirect channel, all products, {kw['d1']} – {kw['d2']}. Requests are outbound bid requests Seedtag forwards to the MagniteDirect demand channel (not bid inputs). Log scale — volumes are heavily skewed. Respects the Editorial Group filter only.</p>
+<p class="data-footer">Source: SSP events daily (stg_ssp_events_daily) — MagniteDirect channel, all products, {kw['d1']} – {kw['d2']}. Requests are outbound bid requests Seedtag forwards to the MagniteDirect demand channel (not bid inputs). Linear axis — scroll to zoom / drag to pan vertically; volumes are heavily skewed. Respects the Editorial Group filter only.</p>
 </section>
 
 <section>
@@ -698,20 +701,17 @@ function buildReqChart(){{
   const datasets=order.map((g,i)=>({{label:g,data:IDXS.map(x=>groups[g][x]),
     borderColor:COLORS[i%COLORS.length],backgroundColor:COLORS[i%COLORS.length],
     pointRadius:2,tension:0.25}}));
-  // pad the log axis so the lines sit near the middle rather than hugging the top
-  const vals=datasets.flatMap(d=>d.data).filter(v=>v>0);
-  const yMax=vals.length?Math.pow(10,Math.ceil(Math.log10(Math.max(...vals)))+2):undefined;
-  const yMin=vals.length?Math.pow(10,Math.floor(Math.log10(Math.min(...vals)))-1):undefined;
   if(!reqChart){{
     const o=baseOpts(t);
     o.plugins.legend.display=false;
     o.plugins.tooltip.callbacks={{label:c=>c.dataset.label+': '+fmtM(c.parsed.y)}};
+    // scroll wheel zooms the y axis, drag pans it vertically; button below resets
+    o.plugins.zoom={{zoom:{{wheel:{{enabled:true}},mode:'y'}},pan:{{enabled:true,mode:'y'}}}};
     o.scales={{x:{{ticks:{{color:t.muted}},grid:{{color:t.border}}}},
-      y:{{type:'logarithmic',min:yMin,max:yMax,ticks:{{color:t.muted,callback:v=>fmtM(Number(v))}},grid:{{color:t.border}},title:{{display:true,text:'Requests (log scale)',color:t.muted}}}}}};
+      y:{{beginAtZero:true,ticks:{{color:t.muted,callback:v=>fmtM(Number(v))}},grid:{{color:t.border}},title:{{display:true,text:'Requests',color:t.muted}}}}}};
     reqChart=new Chart(document.getElementById('reqChart'),{{type:'line',data:{{labels:IDXS.map(i=>LABELS[i]),datasets}},options:o}}); charts.push(reqChart);
   }} else {{
     reqChart.data={{labels:IDXS.map(i=>LABELS[i]),datasets}};
-    reqChart.options.scales.y.min=yMin; reqChart.options.scales.y.max=yMax;
     reqChart.update('none');
   }}
   buildGroupLegend(reqChart,'reqLegend',[['Editorial Group',order.map((g,i)=>[i,g])]]);
