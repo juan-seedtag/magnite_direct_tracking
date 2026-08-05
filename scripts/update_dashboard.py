@@ -429,11 +429,12 @@ tr.sub-row td.pub {{ padding-left:28px; color:var(--text-muted); }}
 
 <section>
 <h2>1 · Evolution by channel {tooltip(kw['sql_main'])}</h2>
-<div class="chart-box"><div id="revLegend" class="group-legend"></div><div style="position:relative;height:320px"><canvas id="revChart"></canvas></div></div>
+<div class="chart-box"><div id="revLegend" class="group-legend"></div><div style="position:relative;height:320px"><canvas id="revChart"></canvas></div>
+<p class="summary-line"><strong>⚠ Dual axes:</strong> Rubicon reads on the <strong>left</strong> axis and MagniteDirect on the <strong>right</strong> axis, each on its own scale — the two channels differ by roughly 100×, so bar heights are only comparable within a channel, never across channels.</p></div>
 <p class="summary-line" id="s1Summary"></p>
 <div class="chart-box"><div id="ratioLegend" class="group-legend"></div><div style="position:relative;height:280px"><canvas id="ratioChart"></canvas></div></div>
 <p class="summary-line">Win Rate (HB) and Imp Rate (Tag) per channel (left axis) and CPM (dashed, right axis). {wr_note} Recent CPM points are provisional due to the impression-reporting lag.</p>
-<p class="data-footer">Source: Daily supply funnel — Magnite channels only, publishers with MagniteDirect activity, all products, {kw['d1']} – {kw['d2']}, revenue in EUR. Respects the filters above. Dates marked * are pending warehouse restore.</p>
+<p class="data-footer">Source: Daily supply funnel — Magnite channels only, publishers with MagniteDirect activity, all products, {kw['d1']} – {kw['d2']}, revenue in EUR. Dual linear axes (Rubicon left, MagniteDirect right). Respects the filters above. Dates marked * are pending warehouse restore.</p>
 </section>
 
 <section>
@@ -444,14 +445,7 @@ tr.sub-row td.pub {{ padding-left:28px; color:var(--text-muted); }}
 </section>
 
 <section>
-<h2>3 · Daily ramp since MagniteDirect launch — vs Rubicon {tooltip(kw['sql_main'])}</h2>
-<div class="chart-box"><div id="rampLegend" class="group-legend"></div><div style="position:relative;height:320px"><canvas id="rampChart"></canvas></div></div>
-<p class="summary-line" id="s2Summary"></p>
-<p class="data-footer">Source: Daily supply funnel — Rubicon &amp; MagniteDirect, publishers with MagniteDirect activity, all products, {kw['md_launch']} – {kw['d2']}, revenue in EUR (log scale). {wr_note} Respects the filters above.</p>
-</section>
-
-<section>
-<h2>4 · Editorial group / publisher head-to-head {tooltip(kw['sql_main'])}</h2>
+<h2>3 · Editorial group / publisher head-to-head {tooltip(kw['sql_main'])}</h2>
 <div class="tbl-actions"><button onclick="setExpandAll('pivot',true)">Expand all</button><button onclick="setExpandAll('pivot',false)">Collapse all</button></div>
 <div class="pivot-wrap"><table class="report-table" id="pivotTable"></table></div>
 <p class="summary-line" id="pivotSummary"></p>
@@ -459,7 +453,7 @@ tr.sub-row td.pub {{ padding-left:28px; color:var(--text-muted); }}
 </section>
 
 <section>
-<h2>5 · Funnel health by editorial group {tooltip(kw['sql_main'])}</h2>
+<h2>4 · Funnel health by editorial group {tooltip(kw['sql_main'])}</h2>
 <div class="tbl-actions"><button onclick="setExpandAll('funnel',true)">Expand all</button><button onclick="setExpandAll('funnel',false)">Collapse all</button></div>
 <div class="pivot-wrap"><table class="report-table" id="funnelTable"></table></div>
 <p class="summary-line" id="funnelSummary"></p>
@@ -626,19 +620,17 @@ function dailySeries(){{
   return d;
 }}
 
-let revChart, ratioChart, rampChart;
+let revChart, ratioChart;
 function buildCharts(){{
   const t=themeOpts();
   const D=dailySeries();
   const gap=(i,v)=>PENDING.has(DATES[i])&&!v?null:(v||null);
   const VL=IDXS.map(i=>LABELS[i]);
   const revData={{labels:VL,datasets:[
-    {{type:'line',label:'Rubicon Bids',data:IDXS.map(i=>gap(i,D[0][i].bids)),borderColor:COLORS[2],backgroundColor:COLORS[2],yAxisID:'y2',pointRadius:2,tension:0.25}},
-    {{type:'line',label:'MagniteDirect Bids',data:IDXS.map(i=>gap(i,D[1][i].bids)),borderColor:COLORS[6],backgroundColor:COLORS[6],yAxisID:'y2',pointRadius:2,tension:0.25}},
-    {{label:'Rubicon Gross',data:IDXS.map(i=>gap(i,D[0][i].g)),backgroundColor:COLORS[0]}},
-    {{label:'Rubicon Publisher Rev',data:IDXS.map(i=>gap(i,D[0][i].pr)),backgroundColor:COLORS[3]}},
-    {{label:'MagniteDirect Gross',data:IDXS.map(i=>gap(i,D[1][i].g)),backgroundColor:COLORS[1]}},
-    {{label:'MagniteDirect Publisher Rev',data:IDXS.map(i=>gap(i,D[1][i].pr)),backgroundColor:COLORS[5]}}
+    {{label:'Rubicon Gross',data:IDXS.map(i=>gap(i,D[0][i].g)),backgroundColor:COLORS[0],yAxisID:'y'}},
+    {{label:'Rubicon Publisher Rev',data:IDXS.map(i=>gap(i,D[0][i].pr)),backgroundColor:COLORS[3],yAxisID:'y'}},
+    {{label:'MagniteDirect Gross',data:IDXS.map(i=>gap(i,D[1][i].g)),backgroundColor:COLORS[1],yAxisID:'y2'}},
+    {{label:'MagniteDirect Publisher Rev',data:IDXS.map(i=>gap(i,D[1][i].pr)),backgroundColor:COLORS[5],yAxisID:'y2'}}
   ]}};
   const ratioData={{labels:VL,datasets:[
     {{label:'Rubicon Win Rate (HB)',data:IDXS.map(i=>div(D[0][i].hbHW,D[0][i].hbW)),borderColor:COLORS[0],backgroundColor:COLORS[0],yAxisID:'y',pointRadius:2,tension:0.25}},
@@ -648,24 +640,15 @@ function buildCharts(){{
     {{label:'Rubicon CPM',data:IDXS.map(i=>D[0][i].ip?D[0][i].pr*1000/D[0][i].ip:null),borderColor:COLORS[3],backgroundColor:COLORS[3],yAxisID:'y2',borderDash:[5,4],pointRadius:2,tension:0.25}},
     {{label:'MagniteDirect CPM',data:IDXS.map(i=>D[1][i].ip?D[1][i].pr*1000/D[1][i].ip:null),borderColor:COLORS[5],backgroundColor:COLORS[5],yAxisID:'y2',borderDash:[5,4],pointRadius:2,tension:0.25}}
   ]}};
-  const RIDX=IDXS.filter(i=>DATES[i]>=MD_LAUNCH);
-  const rampData={{labels:RIDX.map(i=>LABELS[i]),datasets:[
-    {{type:'bar',label:'MagniteDirect Gross (EUR)',data:RIDX.map(i=>gap(i,D[1][i].g)),backgroundColor:'#FF6B7C',yAxisID:'y'}},
-    {{type:'bar',label:'Rubicon Gross (EUR)',data:RIDX.map(i=>gap(i,D[0][i].g)),backgroundColor:COLORS[0],yAxisID:'y'}},
-    {{type:'line',label:'MagniteDirect Win Rate (HB)',data:RIDX.map(i=>div(D[1][i].hbHW,D[1][i].hbW)),borderColor:COLORS[1],backgroundColor:COLORS[1],yAxisID:'y2',pointRadius:2,tension:0.25}},
-    {{type:'line',label:'Rubicon Win Rate (HB)',data:RIDX.map(i=>div(D[0][i].hbHW,D[0][i].hbW)),borderColor:COLORS[2],backgroundColor:COLORS[2],yAxisID:'y2',pointRadius:2,tension:0.25}},
-    {{type:'line',label:'MagniteDirect Imp Rate (Tag)',data:RIDX.map(i=>div(D[1][i].tagIS,D[1][i].tagW)),borderColor:COLORS[5],backgroundColor:COLORS[5],yAxisID:'y2',borderDash:[5,4],pointRadius:2,tension:0.25}},
-    {{type:'line',label:'Rubicon Imp Rate (Tag)',data:RIDX.map(i=>div(D[0][i].tagIS,D[0][i].tagW)),borderColor:COLORS[6],backgroundColor:COLORS[6],yAxisID:'y2',borderDash:[5,4],pointRadius:2,tension:0.25}}
-  ]}};
 
   if(!revChart){{
     let o=baseOpts(t);
     o.plugins.legend.display=false;  // grouped HTML legend below instead
     o.scales={{x:{{ticks:{{color:t.muted}},grid:{{color:t.border}}}},
-      y:{{type:'logarithmic',ticks:{{color:t.muted,callback:v=>'€'+Number(v).toLocaleString()}},grid:{{color:t.border}},title:{{display:true,text:'EUR (log scale)',color:t.muted}}}},
-      y2:{{type:'logarithmic',position:'right',ticks:{{color:t.muted,callback:v=>Number(v).toLocaleString()}},grid:{{drawOnChartArea:false}},title:{{display:true,text:'Bids (log scale)',color:t.muted}}}}}};
+      y:{{position:'left',beginAtZero:true,ticks:{{color:t.muted,callback:v=>'€'+Number(v).toLocaleString()}},grid:{{color:t.border}},title:{{display:true,text:'Rubicon (EUR)',color:t.muted}}}},
+      y2:{{position:'right',beginAtZero:true,ticks:{{color:t.muted,callback:v=>'€'+Number(v).toLocaleString()}},grid:{{drawOnChartArea:false}},title:{{display:true,text:'MagniteDirect (EUR)',color:t.muted}}}}}};
     revChart=new Chart(document.getElementById('revChart'),{{type:'bar',data:revData,options:o}}); charts.push(revChart);
-    buildGroupLegend(revChart,'revLegend',[['Bids',[[0,'Rubicon'],[1,'MagniteDirect']]],['Gross',[[2,'Rubicon'],[4,'MagniteDirect']]],['Publisher Rev',[[3,'Rubicon'],[5,'MagniteDirect']]]]);
+    buildGroupLegend(revChart,'revLegend',[['Gross',[[0,'Rubicon'],[2,'MagniteDirect']]],['Publisher Rev',[[1,'Rubicon'],[3,'MagniteDirect']]]]);
     o=baseOpts(t);
     o.scales={{x:{{ticks:{{color:t.muted}},grid:{{color:t.border}}}},
       y:{{position:'left',ticks:{{color:t.muted,callback:v=>(v*100).toFixed(0)+'%'}},grid:{{color:t.border}},title:{{display:true,text:'Rate',color:t.muted}}}},
@@ -673,15 +656,8 @@ function buildCharts(){{
     o.plugins.legend.display=false;
     ratioChart=new Chart(document.getElementById('ratioChart'),{{type:'line',data:ratioData,options:o}}); charts.push(ratioChart);
     buildGroupLegend(ratioChart,'ratioLegend',[['Win Rate (HB)',[[0,'Rubicon'],[1,'MagniteDirect']]],['Imp Rate (Tag)',[[2,'Rubicon'],[3,'MagniteDirect']]],['CPM',[[4,'Rubicon'],[5,'MagniteDirect']]]]);
-    o=baseOpts(t);
-    o.scales={{x:{{ticks:{{color:t.muted}},grid:{{color:t.border}}}},
-      y:{{type:'logarithmic',position:'left',ticks:{{color:t.muted,callback:v=>'€'+Number(v).toLocaleString()}},grid:{{color:t.border}},title:{{display:true,text:'Gross Revenue (EUR, log scale)',color:t.muted}}}},
-      y2:{{position:'right',ticks:{{color:t.muted,callback:v=>(v*100).toFixed(0)+'%'}},grid:{{drawOnChartArea:false}},title:{{display:true,text:'Rate',color:t.muted}}}}}};
-    o.plugins.legend.display=false;
-    rampChart=new Chart(document.getElementById('rampChart'),{{data:rampData,options:o}}); charts.push(rampChart);
-    buildGroupLegend(rampChart,'rampLegend',[['Gross',[[1,'Rubicon'],[0,'MagniteDirect']]],['Win Rate (HB)',[[3,'Rubicon'],[2,'MagniteDirect']]],['Imp Rate (Tag)',[[5,'Rubicon'],[4,'MagniteDirect']]]]);
   }} else {{
-    revChart.data=revData; ratioChart.data=ratioData; rampChart.data=rampData;
+    revChart.data=revData; ratioChart.data=ratioData;
     charts.forEach(c=>c.update('none'));
   }}
 
@@ -689,10 +665,6 @@ function buildCharts(){{
   const pendNote=PENDING.size?' Dates marked * are pending warehouse restore.':'';
   document.getElementById('s1Summary').textContent=
     'Latest closed day ('+DATES[li]+'): Rubicon '+fmtEUR(D[0][li].g||null)+' Gross vs MagniteDirect '+fmtEUR(D[1][li].g||null)+' (MagniteDirect publishers only).'+pendNote;
-  const wr=div(D[1][li].hbHW,D[1][li].hbW), wrR=div(D[0][li].hbHW,D[0][li].hbW);
-  document.getElementById('s2Summary').textContent=
-    'MagniteDirect Gross on '+DATES[li]+': '+fmtEUR(D[1][li].g||null)+(wr!=null?' with a '+(wr*100).toFixed(1)+'% Win Rate (HB)':'')
-    +(wrR!=null?' (Rubicon: '+(wrR*100).toFixed(1)+'%)':'')+'.'+pendNote;
 }}
 
 // grouped HTML legends: one box per metric, channel chips inside.
