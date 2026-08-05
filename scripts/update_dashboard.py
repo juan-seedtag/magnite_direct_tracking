@@ -258,8 +258,6 @@ def render_html(**kw):
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
 <style>
 :root {{
   --bg:#EBE6E4; --surface:#FFFFFF; --surface-2:#F7F4F2; --border:#D4D0CE;
@@ -441,10 +439,10 @@ tr.sub-row td.pub {{ padding-left:28px; color:var(--text-muted); }}
 
 <section>
 <h2>2 · Requests sent to MagniteDirect by editorial group {tooltip(kw['sql_requests'])}</h2>
-<div class="chart-box"><div id="reqLegend" class="group-legend"></div><div style="position:relative;height:320px"><canvas id="reqChart"></canvas></div>
-<p class="summary-line">Scroll on the chart to zoom the request axis in and out, drag to pan up and down (useful to reach the small editorial groups), and <a href="#" onclick="reqChart.resetZoom();return false" style="color:var(--accent)">reset the view</a>.</p></div>
+<div class="chart-box"><div id="reqLegend" class="group-legend"></div><div style="height:340px;overflow-y:auto;border-radius:8px" id="reqScroll"><div style="position:relative;height:1000px;width:99%"><canvas id="reqChart"></canvas></div></div>
+<p class="summary-line">The chart is taller than its window — scroll inside it to move up and down the request axis at a constant scale and reach the smaller editorial groups.</p></div>
 <p class="summary-line" id="reqSummary"></p>
-<p class="data-footer">Source: SSP events daily (stg_ssp_events_daily) — MagniteDirect channel, all products, {kw['d1']} – {kw['d2']}. Requests are outbound bid requests Seedtag forwards to the MagniteDirect demand channel (not bid inputs). Linear axis — scroll to zoom / drag to pan vertically; volumes are heavily skewed. Respects the Editorial Group filter only.</p>
+<p class="data-footer">Source: SSP events daily (stg_ssp_events_daily) — MagniteDirect channel, all products, {kw['d1']} – {kw['d2']}. Requests are outbound bid requests Seedtag forwards to the MagniteDirect demand channel (not bid inputs). Linear axis at constant scale — scroll inside the chart to move along the request axis; volumes are heavily skewed. Respects the Editorial Group filter only.</p>
 </section>
 
 <section>
@@ -705,8 +703,6 @@ function buildReqChart(){{
     const o=baseOpts(t);
     o.plugins.legend.display=false;
     o.plugins.tooltip.callbacks={{label:c=>c.dataset.label+': '+fmtM(c.parsed.y)}};
-    // scroll wheel zooms the y axis, drag pans it vertically; button below resets
-    o.plugins.zoom={{zoom:{{wheel:{{enabled:true}},mode:'y'}},pan:{{enabled:true,mode:'y'}}}};
     o.scales={{x:{{ticks:{{color:t.muted}},grid:{{color:t.border}}}},
       y:{{beginAtZero:true,ticks:{{color:t.muted,callback:v=>fmtM(Number(v))}},grid:{{color:t.border}},title:{{display:true,text:'Requests',color:t.muted}}}}}};
     reqChart=new Chart(document.getElementById('reqChart'),{{type:'line',data:{{labels:IDXS.map(i=>LABELS[i]),datasets}},options:o}}); charts.push(reqChart);
