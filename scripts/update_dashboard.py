@@ -55,6 +55,7 @@ def pack(r, base_date):
         r["source_type"] or "",
         r["adunit_type"] or "",
         r["publisher_name"] or "",
+        r["format"] or "",
         round(float(r["gross_revenue_eur"] or 0), 2),
         round(float(r["omp_gross_revenue_eur"] or 0), 2),
         round(float(r["publisher_revenue_eur"] or 0), 2),
@@ -83,6 +84,13 @@ WITH magnite_publishers AS (
 )
 SELECT
   f.date, f.channel_id, f.editorial_group_name, f.publisher_name, f.source_type, f.adunit_type,
+  CASE
+    WHEN f.product_short_code = 'OMV' THEN 'Video'
+    WHEN f.product_short_code = 'OMN' THEN 'Native'
+    WHEN f.product_short_code IN ('OMDS', 'OMFDS') THEN 'Display'
+    WHEN f.product_short_code LIKE 'O%' THEN 'Other OMP'
+    ELSE 'Non-OMP'
+  END AS format,
   SUM(f.bids) AS bids,
   SUM(f.wins) AS wins,
   SUM(f.hb_wins) AS hb_wins,
@@ -108,7 +116,7 @@ WHERE f.date BETWEEN DATE '{d1}' AND DATE '{d2}'
   AND f.channel_id IN ('Rubicon', 'MagniteDirect')
   AND f.source_type IS DISTINCT FROM 'Beachfront'
   AND f.publisher_name IN (SELECT publisher_name FROM magnite_publishers)
-GROUP BY 1, 2, 3, 4, 5, 6"""
+GROUP BY 1, 2, 3, 4, 5, 6, 7"""
 
     sql_requests = f"""{TAG}
 WITH magnite_publishers AS (
@@ -161,7 +169,9 @@ ORDER BY 1, 6 DESC"""
     for d in all_dates:
         if d in present:
             continue
-        if d in snapshots:
+        # only restore snapshots whose row layout matches the current pack()
+        row_len = len(B[0]) if B else 0
+        if d in snapshots and snapshots[d] and len(snapshots[d][0]) == row_len:
             B.extend(snapshots[d])
             restored.append(d)
         pending.append(d)
@@ -381,6 +391,7 @@ table.report-table td.met {{ text-align:left; color:var(--text-subtle); }}
 table.report-table tr.eg-first td {{ border-top:2px solid var(--border); }}
 tr.md-row td, tr.md-row td.pub {{ background:color-mix(in srgb, var(--accent) 6%, var(--surface)); }}
 tr.sub-row td.pub {{ padding-left:28px; color:var(--text-muted); }}
+td.gap {{ background:color-mix(in srgb, var(--accent) 14%, var(--surface)); }}
 .eg-toggle {{ cursor:pointer; user-select:none; font-weight:600; }}
 .eg-toggle .arrow {{ display:inline-block; width:14px; color:var(--text-subtle); }}
 </style>
@@ -428,7 +439,15 @@ tr.sub-row td.pub {{ padding-left:28px; color:var(--text-muted); }}
 </div>
 
 <section>
-<h2>1 · Evolution by channel {tooltip(kw['sql_main'])}</h2>
+<h2>1 · MagniteDirect vs Rubicon — CPM &amp; Win Rate by Editorial Group × Format {tooltip(kw['sql_main'])}</h2>
+<div class="tbl-actions"><button onclick="setExpandAll('fmt',true)">Expand all</button><button onclick="setExpandAll('fmt',false)">Collapse all</button></div>
+<div class="pivot-wrap"><table class="report-table" id="fmtTable"></table></div>
+<p class="summary-line" id="fmtSummary"></p>
+<p class="data-footer">Source: Daily supply funnel — OMP only (Display = OMDS+OMFDS, Native = OMN, Video = OMV), Beachfront excluded, MagniteDirect lifetime ({kw['md_launch']} – {kw['d2']}, both channels on the same window), editorial groups with &gt;€1 MagniteDirect gross. CPM = publisher payout × 1000 / paid impressions; Win Rate = hb wins / SSP wins (safe-divided). Respects the filters above (Month narrows within the lifetime window). Footnotes: (1) Win Rate is not meaningful on elconfidencial — it reads near zero for both channels on its main formats (non-HB integration). (2) Publisher-reported payouts for the last ~3 days may be incomplete — recent CPMs are provisional. (3) Win Rate reads 0% on inImage/inImageRestricted-heavy cells for both channels — tracking gap, not a real zero. Tinted cells = MagniteDirect coverage gaps (Rubicon monetizes the format, MagniteDirect does not).</p>
+</section>
+
+<section>
+<h2>2 · Evolution by channel {tooltip(kw['sql_main'])}</h2>
 <div class="chart-box"><div id="revLegend" class="group-legend"></div><div style="position:relative;height:320px"><canvas id="revChart"></canvas></div>
 <p class="summary-line"><strong>ℹ Stacked bars:</strong> each day shows two bars — Gross Revenue and Publisher Revenue — stacked by channel (Rubicon + MagniteDirect), so the total height is the combined Magnite revenue and the split shows each channel's share. MagniteDirect is ~1% of Rubicon, so its segment is thin — filter or hover to read its exact values.</p></div>
 <p class="summary-line" id="s1Summary"></p>
@@ -438,7 +457,7 @@ tr.sub-row td.pub {{ padding-left:28px; color:var(--text-muted); }}
 </section>
 
 <section>
-<h2>2 · Requests sent to MagniteDirect by editorial group {tooltip(kw['sql_requests'])}</h2>
+<h2>3 · Requests sent to MagniteDirect by editorial group {tooltip(kw['sql_requests'])}</h2>
 <div class="chart-box"><div id="reqLegend" class="group-legend"></div><div style="height:340px;overflow-y:auto;border-radius:8px" id="reqScroll"><div style="position:relative;height:1000px;width:99%"><canvas id="reqChart"></canvas></div></div>
 <p class="summary-line">The chart is taller than its window — scroll inside it to move up and down the request axis at a constant scale and reach the smaller editorial groups.</p></div>
 <p class="summary-line" id="reqSummary"></p>
@@ -446,7 +465,7 @@ tr.sub-row td.pub {{ padding-left:28px; color:var(--text-muted); }}
 </section>
 
 <section>
-<h2>3 · Editorial group / publisher head-to-head {tooltip(kw['sql_main'])}</h2>
+<h2>4 · Editorial group / publisher head-to-head {tooltip(kw['sql_main'])}</h2>
 <div class="tbl-actions"><button onclick="setExpandAll('pivot',true)">Expand all</button><button onclick="setExpandAll('pivot',false)">Collapse all</button></div>
 <div class="pivot-wrap"><table class="report-table" id="pivotTable"></table></div>
 <p class="summary-line" id="pivotSummary"></p>
@@ -454,7 +473,7 @@ tr.sub-row td.pub {{ padding-left:28px; color:var(--text-muted); }}
 </section>
 
 <section>
-<h2>4 · Funnel health by editorial group {tooltip(kw['sql_main'])}</h2>
+<h2>5 · Funnel health by editorial group {tooltip(kw['sql_main'])}</h2>
 <div class="tbl-actions"><button onclick="setExpandAll('funnel',true)">Expand all</button><button onclick="setExpandAll('funnel',false)">Collapse all</button></div>
 <div class="pivot-wrap"><table class="report-table" id="funnelTable"></table></div>
 <p class="summary-line" id="funnelSummary"></p>
@@ -464,7 +483,7 @@ tr.sub-row td.pub {{ padding-left:28px; color:var(--text-muted); }}
 <footer class="report-footer">{LOGO20}<span>Analytics Team · Magnite Connection Health — Rubicon vs MagniteDirect · {kw['d1']} → {kw['d2']}</span></footer>
 
 <script>
-// Row layout: [dIdx, isMD, eg, st, adunit, pub, gross, ompGross, pubRev, bids, wins, hbWins, impsSold, impsPaid]
+// Row layout: [dIdx, isMD, eg, st, adunit, pub, format, gross, ompGross, pubRev, bids, wins, hbWins, impsSold, impsPaid]
 const B = {json.dumps(kw['B'])};
 const REQ = {json.dumps(kw['REQ'])};  // [dIdx, isMD, eg, source_type, pub, channel_requests]
 const N_DAYS = {kw['n_days']};
@@ -477,7 +496,7 @@ const COLORS = ['#5476FF','#E866F4','#948A8A','#67C8FE','#FFA071','#A36AFF','#F4
 const CH=['Rubicon','MagniteDirect'];
 const HB_FAMILY=new Set({hbfam_js});
 const M={{g:0,og:1,pr:2,bids:3,wins:4,hw:5,is:6,ip:7}};
-const B0=6;  // index of first measure
+const B0=7;  // index of first measure
 
 function copyQuery(btn) {{
   const pre = btn.closest('.info-tooltip').querySelector('.sql-pre');
@@ -717,15 +736,74 @@ function buildReqChart(){{
 }}
 
 // ---------- expand/collapse ----------
-const expanded={{pivot:new Set(),funnel:new Set()}};
-function toggleEG(tbl,key){{ const s=expanded[tbl]; s.has(key)?s.delete(key):s.add(key); (tbl==='pivot'?renderPivot:renderFunnel)(); }}
+const expanded={{pivot:new Set(),funnel:new Set(),fmt:new Set()}};
+const TBLR={{}};  // filled below: table name -> [render, keys]
+function toggleEG(tbl,key){{ const s=expanded[tbl]; s.has(key)?s.delete(key):s.add(key); TBLR[tbl][0](); }}
 function setExpandAll(tbl,on){{
   const s=expanded[tbl]; s.clear();
-  if(on) (tbl==='pivot'?pivotKeys():funnelKeys()).forEach(k=>s.add(k));
-  (tbl==='pivot'?renderPivot:renderFunnel)();
+  if(on) TBLR[tbl][1]().forEach(k=>s.add(k));
+  TBLR[tbl][0]();
 }}
 
-// ---------- Section 3: pivot (eg -> publisher, x channel x metric, columns = dates) ----------
+
+// ---------- Section 1: CPM & Win Rate by editorial group x format ----------
+const FORMATS=['Display','Native','Video','Other OMP'];
+const LAUNCH_IDX=DATES.indexOf(MD_LAUNCH);
+let fmtCache=null;
+function fmtAgg(){{
+  // eg -> format -> [rubAcc, mdAcc]; OMP rows only, MagniteDirect lifetime window
+  const eg={{}};
+  filt(B).forEach(r=>{{
+    if(r[0]<LAUNCH_IDX||r[6]==='Non-OMP') return;
+    const store=(eg[r[2]||'(none)']=eg[r[2]||'(none)']||{{}});
+    const f=(store[r[6]]=store[r[6]]||[zeroAcc(),zeroAcc()]);
+    addTo(f[r[1]],r);
+  }});
+  return eg;
+}}
+function fmtKeys(){{ return Object.keys(fmtCache||{{}}); }}
+function fmtCells(pair){{
+  const cpm=a=>a.ip?'€'+(a.pr*1000/a.ip).toFixed(2):'—';
+  const wr=a=>a.wins?fmtPct(a.hw/a.wins):'—';
+  const mdGap=!pair[1].g&&pair[0].g>0;   // Rubicon monetizes, MagniteDirect doesn't
+  const md=cls=>' class="'+(mdGap?'gap':'')+'"';
+  return '<td'+md()+'>'+(pair[1].g?fmtEUR(pair[1].g):'—')+'</td>'
+    +'<td'+md()+'>'+(pair[1].g?cpm(pair[1]):'—')+'</td><td>'+cpm(pair[0])+'</td>'
+    +'<td'+md()+'>'+(pair[1].g?wr(pair[1]):'—')+'</td><td>'+wr(pair[0])+'</td>';
+}}
+function totalsOf(store){{
+  const t=[zeroAcc(),zeroAcc()];
+  Object.values(store).forEach(pair=>{{ for(const ci of [0,1]) for(const k in pair[ci]) t[ci][k]+=pair[ci][k]; }});
+  return t;
+}}
+function renderFmt(){{
+  fmtCache=fmtAgg();
+  const egs=Object.entries(fmtCache)
+    .map(([g,store])=>[g,store,totalsOf(store)])
+    .filter(([g,store,t])=>t[1].g>1)                 // >1 EUR MagniteDirect gross
+    .sort((a,b)=>b[2][1].g-a[2][1].g);
+  let h='<thead><tr><th class="pub">Editorial group / format</th>'
+    +'<th>MD Gross (EUR)</th><th>CPM MagniteDirect</th><th>CPM Rubicon</th>'
+    +'<th>Win Rate MagniteDirect</th><th>Win Rate Rubicon</th></tr></thead><tbody>';
+  egs.forEach(([g,store,t])=>{{
+    const isOpen=expanded.fmt.has(g);
+    const label='<span class="eg-toggle" onclick="toggleEG(\\'fmt\\','+JSON.stringify(g).replace(/"/g,'&quot;')+')"><span class="arrow">'+(isOpen?'\\u25be':'\\u25b8')+'</span>'+esc(g)+'</span>';
+    h+='<tr class="eg-first"><td class="pub">'+label+'</td>'+fmtCells(t)+'</tr>';
+    if(isOpen){{
+      FORMATS.forEach(f=>{{
+        const pair=store[f];
+        if(!pair||(!pair[0].g&&!pair[1].g)) return;
+        h+='<tr class="sub-row"><td class="pub">'+f+'</td>'+fmtCells(pair)+'</tr>';
+      }});
+    }}
+  }});
+  h+='</tbody>';
+  document.getElementById('fmtTable').innerHTML=h;
+  document.getElementById('fmtSummary').textContent=
+    egs.length+' editorial groups with >\\u20ac1 MagniteDirect OMP gross since launch, sorted by MagniteDirect gross; expand a group for its Display / Native / Video split. Tinted cells mark formats Rubicon monetizes but MagniteDirect does not.';
+}}
+
+// ---------- pivot (eg -> publisher, x channel x metric, columns = dates) ----------
 function pivotAgg(){{
   const eg={{}}, pub={{}}, egTot={{}};
   filt(B).forEach(r=>{{
@@ -860,7 +938,10 @@ function renderFunnel(){{
 }}
 
 // ---------- wiring ----------
-function renderAll(){{ computeRange(); refreshFilters(); renderKPIs(); buildCharts(); buildReqChart(); renderPivot(); renderFunnel(); }}
+TBLR.pivot=[renderPivot,()=>pivotKeys()];
+TBLR.funnel=[renderFunnel,()=>funnelKeys()];
+TBLR.fmt=[renderFmt,()=>fmtKeys()];
+function renderAll(){{ computeRange(); refreshFilters(); renderKPIs(); buildCharts(); buildReqChart(); renderFmt(); renderPivot(); renderFunnel(); }}
 renderAll();
 
 function rethemeCharts() {{
