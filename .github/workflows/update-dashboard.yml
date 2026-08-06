@@ -2,9 +2,10 @@ name: Update Magnite dashboard
 
 on:
   schedule:
-    # 11:00 Europe/Madrid — cron is UTC, so fire at both 09:00 and 10:00 UTC
-    # and let the guard step keep only the run where Madrid time is 11:xx.
-    - cron: '0 9,10 * * *'
+    # Target: ~11:00 Europe/Madrid (09:00 UTC in summer). GitHub cron can
+    # drift by an hour or more under load — the job simply runs whenever it
+    # fires; no time guard (a strict guard silently skipped delayed runs).
+    - cron: '0 9 * * *'
   workflow_dispatch: {}
 
 permissions:
@@ -17,32 +18,18 @@ concurrency:
 jobs:
   update:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
-      - name: Guard — only run at 11:00 Madrid time (skip for manual runs)
-        id: guard
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          elif [ "$(TZ=Europe/Madrid date +%H)" = "11" ]; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "run=false" >> "$GITHUB_OUTPUT"
-          fi
-
       - uses: actions/checkout@v4
-        if: steps.guard.outputs.run == 'true'
 
       - uses: actions/setup-python@v5
-        if: steps.guard.outputs.run == 'true'
         with:
           python-version: '3.12'
 
       - name: Install dependencies
-        if: steps.guard.outputs.run == 'true'
         run: pip install -r requirements.txt
 
-      - name: Write Google OAuth token
-        if: steps.guard.outputs.run == 'true'
+      - name: Write credentials
         env:
           GOOGLE_TOKEN: ${{ secrets.GOOGLE_TOKEN }}
           DRIVE_SA: ${{ secrets.DRIVE_SA }}
@@ -51,17 +38,16 @@ jobs:
           echo "$DRIVE_SA" > drive_sa.json
 
       - name: Rebuild dashboard from Trino and upload to Drive
-        if: steps.guard.outputs.run == 'true'
         env:
           TRINO_USER: ${{ secrets.TRINO_USER }}
           DRIVE_SA_JSON: drive_sa.json
         run: python scripts/update_dashboard.py --upload
 
       - name: Commit and push if changed
-        if: steps.guard.outputs.run == 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          git pull --rebase --autostash
           git add index.html data/date_snapshots.json
           if git diff --cached --quiet; then
             echo "No changes to commit."
