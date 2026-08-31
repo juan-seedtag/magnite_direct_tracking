@@ -17,6 +17,8 @@ Missing warehouse partitions are backfilled from data/date_snapshots.json
 
 Output: index.html at repo root; --upload also upserts it to Google Drive.
 """
+import base64
+import gzip
 import json
 import os
 import sys
@@ -161,6 +163,25 @@ ORDER BY 1, 6 DESC"""
     # ---- missing-partition handling ------------------------------------
     all_dates = [(start + dt.timedelta(days=i)).isoformat()
                  for i in range((end - start).days + 1)]
+
+    # ---- suspect-date guard: quarantine dates whose totals sit far above
+    # trend (e.g. a double-loaded partition); they are flagged like missing
+    # partitions and never published or snapshotted.
+    day_gross = {}
+    for r in B:
+        day_gross[r[0]] = day_gross.get(r[0], 0.0) + r[7]
+    suspect_idx = set()
+    for di in sorted(day_gross):
+        prior = [day_gross[d] for d in sorted(day_gross) if d < di and d not in suspect_idx][-7:]
+        if len(prior) >= 4:
+            med = sorted(prior)[len(prior) // 2]
+            if med > 0 and day_gross[di] > 1.8 * med:
+                suspect_idx.add(di)
+    suspect = [all_dates[i] for i in sorted(suspect_idx)]
+    if suspect:
+        B = [r for r in B if r[0] not in suspect_idx]
+        print(f"  suspect dates excluded (gross far above trend): {suspect}", flush=True)
+
     present = {all_dates[r[0]] for r in B}
     snapshots = {}
     if SNAPSHOT_PATH.exists():
@@ -187,7 +208,7 @@ ORDER BY 1, 6 DESC"""
         n_days=(end - start).days + 1,
         md_launch=MD_LAUNCH.isoformat(),
         sql_main=sql_main,
-        pending=pending, restored=restored,
+        pending=pending, restored=restored, suspect=suspect,
         generated=madrid_now.strftime("%Y-%m-%d %H:%M %Z"),
     )
     with open("index.html", "w") as f:
@@ -226,6 +247,11 @@ def upload_to_gdrive(html_path):
     print(f"  Shareable link: {url}")
 
 
+def _pack_json(obj):
+    """gzip+base64 so the page stays small; the browser inflates natively."""
+    return base64.b64encode(gzip.compress(json.dumps(obj).encode(), 9)).decode()
+
+
 def render_html(**kw):
     def tooltip(sql):
         esc = sql.replace("&", "&amp;").replace("<", "&lt;")
@@ -250,12 +276,17 @@ def render_html(**kw):
     pending_banner = ""
     if kw["pending"]:
         restored = set(kw["restored"])
-        parts = [d + (" (restored from prior snapshot)" if d in restored else " (no snapshot available)")
-                 for d in kw["pending"]]
-        pending_banner = ('<li><strong>Pending warehouse restore:</strong> the warehouse is currently missing '
-                          'partitions for ' + ", ".join(parts) +
-                          ' — figures for those dates are held from the last good snapshot, never zeroed, '
-                          'and are marked * in the charts.</li>')
+        suspect = set(kw["suspect"])
+        def _why(d):
+            if d in restored:
+                return " (restored from prior snapshot)"
+            if d in suspect:
+                return " (excluded — metrics read far above trend, suspected duplicate load)"
+            return " (no snapshot available)"
+        parts = [d + _why(d) for d in kw["pending"]]
+        pending_banner = ('<li><strong>Pending warehouse restore:</strong> partitions for ' + ", ".join(parts) +
+                          ' are missing or quarantined — figures for those dates are held from the last good '
+                          'snapshot when available, never zeroed or double-counted, and are marked * in the charts.</li>')
 
     return f"""<!DOCTYPE html>
 <html lang="en" data-theme="auto">
@@ -484,8 +515,14 @@ td.gap {{ background:color-mix(in srgb, var(--accent) 14%, var(--surface)); }}
 
 <script>
 // Row layout: [dIdx, isMD, eg, st, adunit, pub, format, gross, ompGross, pubRev, bids, wins, hbWins, impsSold, impsPaid]
-const B = {json.dumps(kw['B'])};
-const REQ = {json.dumps(kw['REQ'])};  // [dIdx, isMD, eg, source_type, pub, channel_requests]
+let B=[], REQ=[];  // inflated from the gzip blobs below at boot
+const B_GZ='{_pack_json(kw['B'])}';
+const REQ_GZ='{_pack_json(kw['REQ'])}';  // [dIdx, isMD, eg, source_type, pub, channel_requests]
+async function inflate(b64){{
+  const resp=await fetch('data:application/octet-stream;base64,'+b64);
+  const ds=resp.body.pipeThrough(new DecompressionStream('gzip'));
+  return JSON.parse(await new Response(ds).text());
+}}
 const N_DAYS = {kw['n_days']};
 const DATES = Array.from({{length:N_DAYS}}, (_,i)=>{{const d=new Date(Date.UTC({int(kw['d1'][:4])},{int(kw['d1'][5:7])-1},{int(kw['d1'][8:10])}+i));return d.toISOString().slice(0,10);}});
 const PENDING = new Set({json.dumps(kw['pending'])});
@@ -942,7 +979,7 @@ TBLR.pivot=[renderPivot,()=>pivotKeys()];
 TBLR.funnel=[renderFunnel,()=>funnelKeys()];
 TBLR.fmt=[renderFmt,()=>fmtKeys()];
 function renderAll(){{ computeRange(); refreshFilters(); renderKPIs(); buildCharts(); buildReqChart(); renderFmt(); renderPivot(); renderFunnel(); }}
-renderAll();
+(async()=>{{ [B,REQ]=await Promise.all([inflate(B_GZ),inflate(REQ_GZ)]); renderAll(); }})();
 
 function rethemeCharts() {{
   const t=themeOpts();
