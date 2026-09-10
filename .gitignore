@@ -4,3 +4,4 @@ __pycache__/
 .venv/
 drive_sa.json
 prj-*.json
+data/date_snapshots.json

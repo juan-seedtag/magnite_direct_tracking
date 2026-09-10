@@ -40,14 +40,22 @@ TABLE = "st_datalakehouse.analytics.etl_ssp_supply_funnel_daily_local"
 WINDOW_START = dt.date(2026, 7, 1)
 MD_LAUNCH = dt.date(2026, 7, 10)
 TAG = "-- @user:juanperez@seedtag.com @skill:barbi"
-SNAPSHOT_PATH = PROJECT_ROOT / "data" / "date_snapshots.json"
+SNAPSHOT_PATH = PROJECT_ROOT / "data" / "date_snapshots.json.gz"
+SNAPSHOT_DAYS = 10  # keep only recent dates; the file is committed by CI
 
 # HB-family source types: their effective win is the on-page header-auction
 # win (hb_wins); every other source delivers from the SSP win itself.
 HB_FAMILY = ("HeaderBidding", "PrebidServer", "Tam", "Gob")
 
+# Publisher-grain detail names the publishers making up the top share of
+# MagniteDirect revenue; everything below that cut is aggregated into an
+# "Other publishers" bucket per editorial group, so totals stay complete
+# while the page stays small.
+PUB_REVENUE_COVERAGE = 0.95
+OTHER_PUB_LABEL = "Other publishers"
 
-def pack(r, base_date):
+
+def pack(r, base_date, with_pub=True):
     """Row -> compact array; layout documented in the JS header comment."""
     d_idx = (dt.date.fromisoformat(str(r["date"])[:10]) - base_date).days
     return [
@@ -56,7 +64,7 @@ def pack(r, base_date):
         r["editorial_group_name"] or "",
         r["source_type"] or "",
         r["adunit_type"] or "",
-        r["publisher_name"] or "",
+        (r["publisher_name"] or "") if with_pub else "",
         r["format"] or "",
         round(float(r["gross_revenue_eur"] or 0), 2),
         round(float(r["omp_gross_revenue_eur"] or 0), 2),
@@ -76,24 +84,14 @@ def main():
     d1, d2 = start.isoformat(), end.isoformat()
     hb_list = ",".join(f"'{s}'" for s in HB_FAMILY)
 
-    sql_main = f"""{TAG}
-WITH magnite_publishers AS (
-  SELECT DISTINCT publisher_name
-  FROM {TABLE}
-  WHERE date BETWEEN DATE '{d1}' AND DATE '{d2}'
-    AND channel_id = 'MagniteDirect'
-    AND source_type IS DISTINCT FROM 'Beachfront'
-)
-SELECT
-  f.date, f.channel_id, f.editorial_group_name, f.publisher_name, f.source_type, f.adunit_type,
-  CASE
+    fmt_case = """  CASE
     WHEN f.product_short_code = 'OMV' THEN 'Video'
     WHEN f.product_short_code = 'OMN' THEN 'Native'
     WHEN f.product_short_code IN ('OMDS', 'OMFDS') THEN 'Display'
     WHEN f.product_short_code LIKE 'O%' THEN 'Other OMP'
     ELSE 'Non-OMP'
-  END AS format,
-  SUM(f.bids) AS bids,
+  END AS format,"""
+    measures = """  SUM(f.bids) AS bids,
   SUM(f.wins) AS wins,
   SUM(f.hb_wins) AS hb_wins,
   SUM(f.imps_sold) AS imps_sold,
@@ -101,19 +99,78 @@ SELECT
   SUM(f.revenue_st_eur) AS gross_revenue_eur,
   SUM(f.publisher_revenue_eur) AS publisher_revenue_eur,
   SUM(CASE WHEN f.product_short_code LIKE 'O%' THEN f.revenue_st_eur ELSE 0 END) AS omp_gross_revenue_eur,
-  -- Win Rate = HB wins / SSP wins — HB-family sources only, NULL elsewhere
-  IF(SUM(CASE WHEN f.source_type IN ({hb_list}) THEN f.wins ELSE 0 END) = 0, NULL,
-     SUM(CASE WHEN f.source_type IN ({hb_list}) THEN f.hb_wins ELSE 0 END) * 1.0 /
-     SUM(CASE WHEN f.source_type IN ({hb_list}) THEN f.wins ELSE 0 END)) AS win_rate,
-  -- Imp Rate = impressions sold / SSP wins — non-HB (Tag-family) sources only, NULL elsewhere
-  IF(SUM(CASE WHEN f.source_type NOT IN ({hb_list}) THEN f.wins ELSE 0 END) = 0, NULL,
-     SUM(CASE WHEN f.source_type NOT IN ({hb_list}) THEN f.imps_sold ELSE 0 END) * 1.0 /
-     SUM(CASE WHEN f.source_type NOT IN ({hb_list}) THEN f.wins ELSE 0 END)) AS imp_rate,
+  IF(SUM(CASE WHEN f.source_type IN ({hb}) THEN f.wins ELSE 0 END) = 0, NULL,
+     SUM(CASE WHEN f.source_type IN ({hb}) THEN f.hb_wins ELSE 0 END) * 1.0 /
+     SUM(CASE WHEN f.source_type IN ({hb}) THEN f.wins ELSE 0 END)) AS win_rate,
+  IF(SUM(CASE WHEN f.source_type NOT IN ({hb}) THEN f.wins ELSE 0 END) = 0, NULL,
+     SUM(CASE WHEN f.source_type NOT IN ({hb}) THEN f.imps_sold ELSE 0 END) * 1.0 /
+     SUM(CASE WHEN f.source_type NOT IN ({hb}) THEN f.wins ELSE 0 END)) AS imp_rate,
   SUM(CASE WHEN f.product_short_code LIKE 'O%' THEN f.revenue_st_eur ELSE 0 END) * 1000.0
   / NULLIF(SUM(f.bids), 0) AS rpm_per_bid_eur,
   IF(SUM(f.imps_paid) = 0, NULL,
-     SUM(f.publisher_revenue_eur) * 1000.0 / SUM(f.imps_paid)) AS cpm_eur
+     SUM(f.publisher_revenue_eur) * 1000.0 / SUM(f.imps_paid)) AS cpm_eur""".format(hb=hb_list)
+
+    keep_cte = f"""named_publishers AS (
+  SELECT publisher_name FROM (
+    SELECT publisher_name,
+           SUM(SUM(revenue_st_eur)) OVER (ORDER BY SUM(revenue_st_eur) DESC, publisher_name)
+             - SUM(revenue_st_eur) AS cum_before,
+           SUM(SUM(revenue_st_eur)) OVER () AS total_gross
+    FROM {TABLE}
+    WHERE date BETWEEN DATE '{d1}' AND DATE '{d2}'
+      AND channel_id = 'MagniteDirect'
+      AND source_type IS DISTINCT FROM 'Beachfront'
+    GROUP BY publisher_name
+  )
+  -- keep publishers until the running share of MagniteDirect gross reaches the
+  -- coverage target; the publisher crossing the line is kept
+  WHERE cum_before < {PUB_REVENUE_COVERAGE} * total_gross
+)"""
+
+    scope_cte = f"""WITH magnite_publishers AS (
+  SELECT DISTINCT publisher_name
+  FROM {TABLE}
+  WHERE date BETWEEN DATE '{d1}' AND DATE '{d2}'
+    AND channel_id = 'MagniteDirect'
+    AND source_type IS DISTINCT FROM 'Beachfront'
+)"""
+
+    # A: complete totals at chart grain (no publisher dimension)
+    sql_main = f"""{TAG}
+-- Chart/KPI dataset: every MagniteDirect publisher, aggregated without the
+-- publisher dimension so totals stay exact while the page stays small.
+{scope_cte}
+SELECT
+  f.date, f.channel_id, f.editorial_group_name, f.source_type, f.adunit_type,
+{fmt_case}
+{measures}
 FROM {TABLE} f
+WHERE f.date BETWEEN DATE '{d1}' AND DATE '{d2}'
+  AND f.channel_id IN ('Rubicon', 'MagniteDirect')
+  AND f.source_type IS DISTINCT FROM 'Beachfront'
+  AND f.publisher_name IN (SELECT publisher_name FROM magnite_publishers)
+GROUP BY 1, 2, 3, 4, 5, 6"""
+
+    # B: publisher-grain detail — top publishers named, tail bucketed
+    sql_detail = f"""{TAG}
+-- Table dataset: adds the publisher dimension. Publishers covering the top
+-- {PUB_REVENUE_COVERAGE:.0%} of MagniteDirect gross are named; the remaining tail is
+-- aggregated per editorial group as '{OTHER_PUB_LABEL}', so totals stay complete.
+WITH magnite_publishers AS (
+  SELECT DISTINCT publisher_name
+  FROM {TABLE}
+  WHERE date BETWEEN DATE '{d1}' AND DATE '{d2}'
+    AND channel_id = 'MagniteDirect'
+    AND source_type IS DISTINCT FROM 'Beachfront'
+),
+{keep_cte}
+SELECT
+  f.date, f.channel_id, f.editorial_group_name, f.source_type, f.adunit_type,
+  COALESCE(n.publisher_name, '{OTHER_PUB_LABEL}') AS publisher_name,
+{fmt_case}
+{measures}
+FROM {TABLE} f
+LEFT JOIN named_publishers n ON f.publisher_name = n.publisher_name
 WHERE f.date BETWEEN DATE '{d1}' AND DATE '{d2}'
   AND f.channel_id IN ('Rubicon', 'MagniteDirect')
   AND f.source_type IS DISTINCT FROM 'Beachfront'
@@ -127,19 +184,26 @@ WITH magnite_publishers AS (
   WHERE date BETWEEN DATE '{d1}' AND DATE '{d2}'
     AND channel_id = 'MagniteDirect'
     AND source_type IS DISTINCT FROM 'Beachfront'
-)
-SELECT date, channel_id, editorial_group_name, publisher_name, source_type,
-       SUM(ssp_channel_requests) AS channel_requests
-FROM st_datalakehouse.analytics.stg_ssp_events_daily
-WHERE date BETWEEN DATE '{d1}' AND DATE '{d2}'
-  AND channel_id IN ('Rubicon', 'MagniteDirect')
-  AND publisher_name IN (SELECT publisher_name FROM magnite_publishers)
+),
+{keep_cte}
+SELECT e.date, e.channel_id, e.editorial_group_name,
+       COALESCE(n.publisher_name, '{OTHER_PUB_LABEL}') AS publisher_name,
+       e.source_type,
+       SUM(e.ssp_channel_requests) AS channel_requests
+FROM st_datalakehouse.analytics.stg_ssp_events_daily e
+LEFT JOIN named_publishers n ON e.publisher_name = n.publisher_name
+WHERE e.date BETWEEN DATE '{d1}' AND DATE '{d2}'
+  AND e.channel_id IN ('Rubicon', 'MagniteDirect')
+  AND e.publisher_name IN (SELECT publisher_name FROM magnite_publishers)
 GROUP BY 1, 2, 3, 4, 5
 ORDER BY 1, 6 DESC"""
 
-    print("querying supply funnel (daily x all dimensions, MagniteDirect publishers)...", flush=True)
+    print("querying supply funnel totals (no publisher dimension)...", flush=True)
     rows = run_trino_query(sql_main)
     print(f"  {len(rows)} rows", flush=True)
+    print(f"querying publisher detail (top {PUB_REVENUE_COVERAGE:.0%} named, tail bucketed)...", flush=True)
+    det_rows = run_trino_query(sql_detail)
+    print(f"  {len(det_rows)} rows, {len({r['publisher_name'] for r in det_rows})} publishers", flush=True)
     print("querying daily channel requests by editorial group...", flush=True)
     req_rows = run_trino_query(sql_requests)
     REQ = [[(dt.date.fromisoformat(str(r["date"])[:10]) - start).days,
@@ -150,7 +214,9 @@ ORDER BY 1, 6 DESC"""
             int(r["channel_requests"] or 0)] for r in req_rows]
     print(f"  {len(REQ)} rows, {len({x[2] for x in REQ})} editorial groups", flush=True)
 
-    B = [pack(r, start) for r in rows]
+    A = [pack(r, start, with_pub=False) for r in rows]
+    DET = [pack(r, start) for r in det_rows]
+    B = A  # guard/partition logic below operates on the complete totals
 
     # HB-family guard: any hb_wins outside the CASE list means the effective
     # win-rate numerator is wrong — fail loudly so the list gets extended.
@@ -179,13 +245,16 @@ ORDER BY 1, 6 DESC"""
                 suspect_idx.add(di)
     suspect = [all_dates[i] for i in sorted(suspect_idx)]
     if suspect:
-        B = [r for r in B if r[0] not in suspect_idx]
+        A = [r for r in A if r[0] not in suspect_idx]
+        DET = [r for r in DET if r[0] not in suspect_idx]
+        B = A
         print(f"  suspect dates excluded (gross far above trend): {suspect}", flush=True)
 
     present = {all_dates[r[0]] for r in B}
     snapshots = {}
     if SNAPSHOT_PATH.exists():
-        snapshots = json.loads(SNAPSHOT_PATH.read_text())
+        with gzip.open(SNAPSHOT_PATH, "rt") as fh:
+            snapshots = json.load(fh)
     pending, restored = [], []
     for d in all_dates:
         if d in present:
@@ -193,18 +262,23 @@ ORDER BY 1, 6 DESC"""
         # only restore snapshots whose row layout matches the current pack()
         row_len = len(B[0]) if B else 0
         if d in snapshots and snapshots[d] and len(snapshots[d][0]) == row_len:
-            B.extend(snapshots[d])
+            A.extend(snapshots[d])
             restored.append(d)
         pending.append(d)
-    for d in present:  # refresh the snapshot from live data
-        snapshots[d] = [r for r in B if all_dates[r[0]] == d]
+    for d in present:  # refresh the snapshot from live data (totals only)
+        snapshots[d] = [r for r in A if all_dates[r[0]] == d]
+    for d in sorted(snapshots)[:-SNAPSHOT_DAYS]:  # keep only the recent tail
+        del snapshots[d]
     SNAPSHOT_PATH.parent.mkdir(exist_ok=True)
-    SNAPSHOT_PATH.write_text(json.dumps(snapshots))
+    with gzip.open(SNAPSHOT_PATH, "wt") as fh:
+        json.dump(snapshots, fh)
     if pending:
         print(f"  missing partitions: {pending} (restored from snapshot: {restored})", flush=True)
 
     html = render_html(
-        B=B, REQ=REQ, sql_requests=sql_requests, d1=d1, d2=d2,
+        A=A, DET=DET, REQ=REQ, sql_requests=sql_requests,
+        sql_detail=sql_detail, coverage=PUB_REVENUE_COVERAGE,
+        n_pubs=len({r['publisher_name'] for r in det_rows} - {OTHER_PUB_LABEL}), d1=d1, d2=d2,
         n_days=(end - start).days + 1,
         md_launch=MD_LAUNCH.isoformat(),
         sql_main=sql_main,
@@ -500,7 +574,7 @@ td.gap {{ background:color-mix(in srgb, var(--accent) 14%, var(--surface)); }}
 <div class="tbl-actions"><button onclick="setExpandAll('pivot',true)">Expand all</button><button onclick="setExpandAll('pivot',false)">Collapse all</button></div>
 <div class="pivot-wrap"><table class="report-table" id="pivotTable"></table></div>
 <p class="summary-line" id="pivotSummary"></p>
-<p class="data-footer">Source: Daily supply funnel — publishers with MagniteDirect activity, on both Magnite channels, all products, {kw['d1']} – {kw['d2']}, revenue in EUR. Main rows = editorial groups (click to expand publishers); MagniteDirect rows tinted coral; — = no data / provisional (impressions lag).</p>
+<p class="data-footer">Source: Daily supply funnel — publishers with MagniteDirect activity, on both Magnite channels, all products, {kw['d1']} – {kw['d2']}, revenue in EUR. Main rows = editorial groups (click to expand publishers); MagniteDirect rows tinted coral; Publisher-level rows name the {kw['n_pubs']:,} publishers making up the top {kw['coverage']:.0%} of MagniteDirect gross in the window; the rest are aggregated per editorial group as “Other publishers”, so every total still includes all traffic. — = no data / provisional (impressions lag).</p>
 </section>
 
 <section>
@@ -508,15 +582,18 @@ td.gap {{ background:color-mix(in srgb, var(--accent) 14%, var(--surface)); }}
 <div class="tbl-actions"><button onclick="setExpandAll('funnel',true)">Expand all</button><button onclick="setExpandAll('funnel',false)">Collapse all</button></div>
 <div class="pivot-wrap"><table class="report-table" id="funnelTable"></table></div>
 <p class="summary-line" id="funnelSummary"></p>
-<p class="data-footer">Source: Daily supply funnel — publishers with MagniteDirect activity, all products (OMP-only revenue also shown), {kw['d1']} – {kw['d2']}, revenue in EUR. Requests are outbound bid requests to the channel (from stg_ssp_events_daily; not sliced by ad unit). Funnel order: requests → wins → (HB only: hb wins → hb inserts) → imps sold. {wr_note} Main rows = editorial group × channel (click to expand publishers); slice with the filters at the top.</p>
+<p class="data-footer">Source: Daily supply funnel — publishers with MagniteDirect activity, all products (OMP-only revenue also shown), {kw['d1']} – {kw['d2']}, revenue in EUR. Requests are outbound bid requests to the channel (from stg_ssp_events_daily; not sliced by ad unit). Funnel order: requests → wins → (HB only: hb wins → hb inserts) → imps sold. {wr_note} Main rows = editorial group × channel (click to expand publishers); slice with the filters at the top. Publisher-level rows name the {kw['n_pubs']:,} publishers making up the top {kw['coverage']:.0%} of MagniteDirect gross in the window; the rest are aggregated per editorial group as “Other publishers”, so every total still includes all traffic.</p>
 </section>
 
 <footer class="report-footer">{LOGO20}<span>Analytics Team · Magnite Connection Health — Rubicon vs MagniteDirect · {kw['d1']} → {kw['d2']}</span></footer>
 
 <script>
 // Row layout: [dIdx, isMD, eg, st, adunit, pub, format, gross, ompGross, pubRev, bids, wins, hbWins, impsSold, impsPaid]
-let B=[], REQ=[];  // inflated from the gzip blobs below at boot
-const B_GZ='{_pack_json(kw['B'])}';
+// B = complete totals (no publisher dimension); DET = publisher-grain detail
+// above the revenue threshold. Same layout; B leaves the publisher slot empty.
+let B=[], DET=[], REQ=[];
+const B_GZ='{_pack_json(kw['A'])}';
+const DET_GZ='{_pack_json(kw['DET'])}';
 const REQ_GZ='{_pack_json(kw['REQ'])}';  // [dIdx, isMD, eg, source_type, pub, channel_requests]
 async function inflate(b64){{
   const resp=await fetch('data:application/octet-stream;base64,'+b64);
@@ -569,6 +646,9 @@ function rowPass(r,skip){{
     &&(skip==='month'||!SEL.month.size||SEL.month.has(DATES[r[0]].slice(0,7)));
 }}
 function filt(rows){{ return rows.filter(r=>rowPass(r,null)); }}
+// Totals come from the publisher-free dataset; selecting publishers switches to
+// the detail dataset (>99.9% of gross).
+function src(){{ return SEL.pub.size?DET:B; }}
 // requests rows [di,ch,eg,st,pub,v] — no ad-unit dimension: honor every other filter
 function filtReq(){{
   return REQ.filter(r=>(!SEL.month.size||SEL.month.has(DATES[r[0]].slice(0,7)))
@@ -616,7 +696,8 @@ document.addEventListener('click',()=>document.querySelectorAll('.msel.open').fo
 function refreshFilters(){{
   FDEF.forEach(([id,key,label,getter])=>{{
     const root=document.getElementById(id);
-    const avail=[...new Set(B.filter(r=>rowPass(r,key)).map(getter).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
+    const pool=(key==='pub')?DET:B;
+    const avail=[...new Set(pool.filter(r=>rowPass(r,key)).map(getter).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
     // prune selections that are no longer offered
     [...SEL[key]].forEach(v=>{{ if(!avail.includes(v)) SEL[key].delete(v); }});
     const list=root.querySelector('.msel-list');
@@ -641,7 +722,7 @@ function addTo(acc,row){{
 // ---------- KPI cards ----------
 function renderKPIs(){{
   const acc=[zeroAcc(),zeroAcc()];
-  filt(B).forEach(r=>addTo(acc[r[1]],r));
+  filt(src()).forEach(r=>addTo(acc[r[1]],r));
   [['kpi-md',1],['kpi-rub',0]].forEach(([id,ci])=>{{
     const a=acc[ci];
     const cards=[
@@ -673,7 +754,7 @@ const charts=[];
 
 function dailySeries(){{
   const d=[Array.from({{length:N_DAYS}},zeroAcc),Array.from({{length:N_DAYS}},zeroAcc)];
-  filt(B).forEach(r=>addTo(d[r[1]][r[0]],r));
+  filt(src()).forEach(r=>addTo(d[r[1]][r[0]],r));
   return d;
 }}
 
@@ -790,7 +871,7 @@ let fmtCache=null;
 function fmtAgg(){{
   // eg -> format -> [rubAcc, mdAcc]; OMP rows only, MagniteDirect lifetime window
   const eg={{}};
-  filt(B).forEach(r=>{{
+  filt(src()).forEach(r=>{{
     if(r[0]<LAUNCH_IDX||r[6]==='Non-OMP') return;
     const store=(eg[r[2]||'(none)']=eg[r[2]||'(none)']||{{}});
     const f=(store[r[6]]=store[r[6]]||[zeroAcc(),zeroAcc()]);
@@ -843,18 +924,19 @@ function renderFmt(){{
 // ---------- pivot (eg -> publisher, x channel x metric, columns = dates) ----------
 function pivotAgg(){{
   const eg={{}}, pub={{}}, egTot={{}};
-  filt(B).forEach(r=>{{
-    const kEg=r[2]||'(none)', kPub=r[5];
-    const day=r[0], ci=r[1];
-    for(const [store,key] of [[eg,kEg],[pub,kEg+'\\u0000'+kPub]]){{
-      if(!store[key]) store[key]=[Array.from({{length:N_DAYS}},zeroAcc),Array.from({{length:N_DAYS}},zeroAcc)];
-      addTo(store[key][ci][day],r);
-    }}
-    egTot[kEg]=(egTot[kEg]||0)+(ci===1?r[B0+M.g]:0);
+  const bump=(store,key,ci,day,r)=>{{
+    if(!store[key]) store[key]=[Array.from({{length:N_DAYS}},zeroAcc),Array.from({{length:N_DAYS}},zeroAcc)];
+    addTo(store[key][ci][day],r);
+  }};
+  filt(src()).forEach(r=>{{
+    const kEg=r[2]||'(none)';
+    bump(eg,kEg,r[1],r[0],r);
+    egTot[kEg]=(egTot[kEg]||0)+(r[1]===1?r[B0+M.g]:0);
   }});
+  filt(DET).forEach(r=>bump(pub,(r[2]||'(none)')+'\\u0000'+r[5],r[1],r[0],r));
   filtReq().forEach(([di,ci,g,st,pn,v])=>{{
     const kEg=g||'(none)';
-    for(const [store,key] of [[eg,kEg],[pub,kEg+'\u0000'+pn]]){{
+    for(const [store,key] of [[eg,kEg],[pub,kEg+'\\u0000'+pn]]){{
       if(!store[key]) store[key]=[Array.from({{length:N_DAYS}},zeroAcc),Array.from({{length:N_DAYS}},zeroAcc)];
       store[key][ci][di].req+=v;
     }}
@@ -917,17 +999,19 @@ function renderPivot(){{
 // ---------- Section 4: funnel (eg x channel -> publisher) ----------
 function funnelAgg(){{
   const eg={{}}, pub={{}};
-  filt(B).forEach(r=>{{
+  filt(src()).forEach(r=>{{
     const kEg=(r[2]||'(none)')+'\\u0001'+r[1];
-    const kPub=kEg+'\\u0000'+r[5];
-    for(const [store,key] of [[eg,kEg],[pub,kPub]]){{
-      if(!store[key]) store[key]=zeroAcc();
-      addTo(store[key],r);
-    }}
+    if(!eg[kEg]) eg[kEg]=zeroAcc();
+    addTo(eg[kEg],r);
+  }});
+  filt(DET).forEach(r=>{{
+    const kPub=(r[2]||'(none)')+'\\u0001'+r[1]+'\\u0000'+r[5];
+    if(!pub[kPub]) pub[kPub]=zeroAcc();
+    addTo(pub[kPub],r);
   }});
   filtReq().forEach(([di,ci,g,st,pn,v])=>{{
-    const kEg=(g||'(none)')+'\u0001'+ci;
-    for(const [store,key] of [[eg,kEg],[pub,kEg+'\u0000'+pn]]){{
+    const kEg=(g||'(none)')+'\\u0001'+ci;
+    for(const [store,key] of [[eg,kEg],[pub,kEg+'\\u0000'+pn]]){{
       if(!store[key]) store[key]=zeroAcc();
       store[key].req+=v;
     }}
@@ -979,7 +1063,7 @@ TBLR.pivot=[renderPivot,()=>pivotKeys()];
 TBLR.funnel=[renderFunnel,()=>funnelKeys()];
 TBLR.fmt=[renderFmt,()=>fmtKeys()];
 function renderAll(){{ computeRange(); refreshFilters(); renderKPIs(); buildCharts(); buildReqChart(); renderFmt(); renderPivot(); renderFunnel(); }}
-(async()=>{{ [B,REQ]=await Promise.all([inflate(B_GZ),inflate(REQ_GZ)]); renderAll(); }})();
+(async()=>{{ [B,DET,REQ]=await Promise.all([inflate(B_GZ),inflate(DET_GZ),inflate(REQ_GZ)]); renderAll(); }})();
 
 function rethemeCharts() {{
   const t=themeOpts();
