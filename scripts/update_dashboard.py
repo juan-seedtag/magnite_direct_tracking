@@ -45,7 +45,7 @@ SNAPSHOT_DAYS = 10  # keep only recent dates; the file is committed by CI
 
 # HB-family source types: their effective win is the on-page header-auction
 # win (hb_wins); every other source delivers from the SSP win itself.
-HB_FAMILY = ("HeaderBidding", "PrebidServer", "Tam", "Gob")
+HB_FAMILY = ("HeaderBidding", "PrebidServer", "AyPrebidServer", "Tam", "Gob")
 
 # Publisher-grain detail names the publishers making up the top share of
 # MagniteDirect revenue; everything below that cut is aggregated into an
