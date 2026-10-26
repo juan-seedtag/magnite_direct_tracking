@@ -1,51 +1,36 @@
-# Magnite Connection Health — daily dashboard
+# Magnite Connection Health — RETIRED, moved to the dashboards framework
 
-Self-contained HTML dashboard comparing the **Rubicon** (reseller) and **MagniteDirect**
-(direct, live since 2026-07-10) pipes, rebuilt every day at **11:00 Europe/Madrid** by
-GitHub Actions ([.github/workflows/update-dashboard.yml](.github/workflows/update-dashboard.yml)).
+**Since 2026-10-26 this dashboard lives in
+[seedtag/analytics-ai → dashboards/magnite-connection-health](https://github.com/seedtag/analytics-ai/tree/main/dashboards/magnite-connection-health)**
+and is served by the Seedtag Dashboards portal:
 
-- `index.html` — the built dashboard: regenerated daily, published to Drive, never committed (see Viewing).
-- `scripts/update_dashboard.py` — queries Trino (`analytics.etl_ssp_supply_funnel_daily_local`,
-  all products, EUR, window 2026-07-01 → latest closed day) and renders the page.
+https://script.google.com/a/macros/seedtag.com/s/AKfycbwz-lpJ3p1V4cV9lWqOLe6m6Nw8NSYxhDdK3BmdqICc1FgciytDhuLcLXqOaaAyJPBX/exec?app=magnite-connection-health
 
-## Required GitHub secrets
+The old share link (legacy portal `?fileId=1MHf06N5zivDTeb3ECWJkZA-UNAXv070w`) now
+serves a page that forwards there.
 
-Same auth pattern as [publisher_pnl](https://github.com/juan-seedtag/publisher_pnl):
-Google OAuth against `trino-users.seedt.ag`, auto-refreshed on every request
-(`scripts/trino_client.py`). Set these under **Settings → Secrets and variables → Actions**:
+## Why it moved
 
-| Secret | Value |
-|---|---|
-| `GOOGLE_TOKEN` | Full contents of `~/.config/seedtag/token.json` |
-| `TRINO_USER` | Your Seedtag email (e.g. `juanperez@seedtag.com`) |
-| `DRIVE_SA` | Full contents of the Drive service-account JSON (`~/.config/seedtag/prj-jdpa-*.json`) — same value as publisher_pnl's `DRIVE_SA` secret |
+This repo was a standalone script that baked every row into one HTML and
+overwrote a Drive file read by the legacy portal. The page grew ~1.5 MB/day
+(publisher-grain rows for an ever-longer window) and reached **52 MB on
+2026-10-25**; the legacy portal reads files with `DriveApp.getBlob()`, which
+refuses anything over 50 MB, so the link went dark. Committing that file daily
+had also taken this repo to 933 MB of GitHub's 1 GB limit.
 
-Each run also uploads `magnite_connection_health.html` to Google Drive, into the
-**Magnite Direct Tracking** subfolder of the same shared root folder publisher_pnl
-uses (override with `DRIVE_ROOT_FOLDER_ID` / `DRIVE_SUBFOLDER` / `DRIVE_FILENAME` env vars).
+In the framework the page is static, the launch-to-date totals travel in a
+~4 MB `data.json`, and the publisher-grain detail is split into one lazy part
+per ISO week that the page fetches only when a publisher is selected or an
+editorial group is expanded. The queries, the HB-family guard, the suspect-date
+guard and the missing-partition snapshots are the same rules, ported to
+`transform.py` (the snapshot now lives in the framework's `_state.json`).
 
-If the token ever needs recreating: `python scripts/trino_client.py --login`
-(requires `credentials.json`), then update the secret.
+## What is left here
 
-## Viewing
+- `scripts/update_dashboard.py` still builds the old single-file page locally
+  (`python scripts/update_dashboard.py`) — useful only for a side-by-side
+  check. The scheduled workflow was removed; nothing refreshes from here.
+- `data/date_snapshots.json.gz` — the last partition snapshot the old job kept.
 
-**Google Drive is the only place the dashboard is published.** GitHub Pages was
-never enabled (the API 404s and the `github.io` URL returns 404) — the line that
-used to be here described a setup step nobody ran.
-
-`index.html` is **gitignored and not committed**: it is a build artifact that the
-run uploads straight to Drive. It had reached 52 MB and grew ~1.5 MB/day, which
-took the repo to 933 MB of GitHub's 1 GB limit and tripped the 50 MB per-file
-warning on every push. Same approach as
-[source_truth_v2](https://github.com/juan-seedtag/source_truth_v2), whose
-`/output/` is gitignored and whose repo is 4 MB.
-
-`data/date_snapshots.json.gz` *is* committed — CI reads it to backfill missing
-warehouse partitions, and `SNAPSHOT_DAYS` caps it at ~390 KB.
-
-Run manually anytime from the **Actions** tab (`workflow_dispatch`) or locally:
-
-```bash
-pip install -r requirements.txt
-TRINO_HOST=... TRINO_USER=... TRINO_PASSWORD=... python scripts/update_dashboard.py
-```
+History before the migration: see the git log (the daily `Daily dashboard
+refresh` commits are the old job overwriting `index.html`).
