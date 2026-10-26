@@ -43,16 +43,21 @@ jobs:
           DRIVE_SA_JSON: drive_sa.json
         run: python scripts/update_dashboard.py --upload
 
-      - name: Commit and push if changed
+      - name: Commit the partition snapshot if changed
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git pull --rebase --autostash
-          # -A over the tracked paths: tolerates renames of the snapshot file
-          git add -A index.html data/
+          # The built index.html is NOT committed — it is published to Drive and
+          # is gitignored. Committing it daily (~50 MB, +1.5 MB/day) took the repo
+          # to 933 MB of the 1 GB limit and tripped the 50 MB per-file warning.
+          # The snapshot stays: CI needs it to backfill missing partitions, and
+          # SNAPSHOT_DAYS caps it at ~390 KB.
+          # -A over the tracked path: tolerates renames of the snapshot file
+          git add -A data/
           if git diff --cached --quiet; then
             echo "No changes to commit."
           else
-            git commit -m "Daily dashboard refresh $(TZ=Europe/Madrid date +%F)"
+            git commit -m "Partition snapshot $(TZ=Europe/Madrid date +%F)"
             git push
           fi

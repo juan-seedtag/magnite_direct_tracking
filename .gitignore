@@ -5,3 +5,9 @@ __pycache__/
 drive_sa.json
 prj-*.json
 data/date_snapshots.json
+
+# The built dashboard is published to Drive, never committed: at ~50 MB and
+# growing ~1.5 MB/day it pushed the repo to 933 MB of the 1 GB limit.
+# (data/date_snapshots.json.gz IS committed — CI needs it to backfill
+# missing partitions, and it is capped at SNAPSHOT_DAYS.)
+index.html

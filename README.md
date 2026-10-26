@@ -4,7 +4,7 @@ Self-contained HTML dashboard comparing the **Rubicon** (reseller) and **Magnite
 (direct, live since 2026-07-10) pipes, rebuilt every day at **11:00 Europe/Madrid** by
 GitHub Actions ([.github/workflows/update-dashboard.yml](.github/workflows/update-dashboard.yml)).
 
-- `index.html` / `magnite_connection_health_latest.html` — latest dashboard (regenerated daily).
+- `index.html` — the built dashboard: regenerated daily, published to Drive, never committed (see Viewing).
 - `scripts/update_dashboard.py` — queries Trino (`analytics.etl_ssp_supply_funnel_daily_local`,
   all products, EUR, window 2026-07-01 → latest closed day) and renders the page.
 
@@ -29,8 +29,19 @@ If the token ever needs recreating: `python scripts/trino_client.py --login`
 
 ## Viewing
 
-Enable **GitHub Pages** (Settings → Pages → deploy from `main`, root) and the dashboard
-will be served at `https://juan-seedtag.github.io/magnite_direct_tracking/`.
+**Google Drive is the only place the dashboard is published.** GitHub Pages was
+never enabled (the API 404s and the `github.io` URL returns 404) — the line that
+used to be here described a setup step nobody ran.
+
+`index.html` is **gitignored and not committed**: it is a build artifact that the
+run uploads straight to Drive. It had reached 52 MB and grew ~1.5 MB/day, which
+took the repo to 933 MB of GitHub's 1 GB limit and tripped the 50 MB per-file
+warning on every push. Same approach as
+[source_truth_v2](https://github.com/juan-seedtag/source_truth_v2), whose
+`/output/` is gitignored and whose repo is 4 MB.
+
+`data/date_snapshots.json.gz` *is* committed — CI reads it to backfill missing
+warehouse partitions, and `SNAPSHOT_DAYS` caps it at ~390 KB.
 
 Run manually anytime from the **Actions** tab (`workflow_dispatch`) or locally:
 
